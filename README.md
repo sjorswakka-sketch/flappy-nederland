@@ -2,6 +2,8 @@
 
 A small, fully playable browser arcade game with a Dutch twist: flap past canal-side pipes, collect a personal best, and unlock your next bird. Built with TypeScript, Vite, and Canvas 2D, with no runtime framework or external game assets.
 
+**[Play Flappy Nederland online](https://sjorswakka-sketch.github.io/flappy-nederland/)** · No installation needed.
+
 ## Play
 
 1. Choose a bird on the start screen. Oranje is ready from the beginning.
