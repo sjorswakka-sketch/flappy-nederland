@@ -1,6 +1,6 @@
 {
   "name": "drunken-joyride",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "type": "module",
   "description": "An endless midnight arcade drive through traffic and roadworks.",
@@ -8,12 +8,21 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "vitest run"
+    "test": "vitest run",
+    "desktop:dev": "npm run build && electron .",
+    "desktop:build": "npm run build && electron-builder --config desktop/build.config.cjs --win zip --x64 --publish never"
   },
   "devDependencies": {
     "typescript": "7.0.2",
     "vite": "8.3.5",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
   },
-  "engines": { "node": ">=22.12.0" }
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "main": "desktop/main.cjs",
+  "author": "Drunken Joyride",
+  "license": "MIT"
 }

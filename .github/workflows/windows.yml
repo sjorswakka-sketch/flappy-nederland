@@ -1,0 +1,115 @@
+name: Windows test build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run desktop:build
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Launch and test the packaged Windows app
+        shell: pwsh
+        run: |
+          $executable = Join-Path $PWD 'release/win-unpacked/Drunken Joyride.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'joyride-smoke.stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'joyride-smoke.stderr.log'
+          $report = Join-Path $env:RUNNER_TEMP 'joyride-smoke.json'
+          if (!(Test-Path -LiteralPath $executable)) { throw 'Packaged executable is missing.' }
+          $game = Start-Process -FilePath $executable -ArgumentList '--smoke-test',"--smoke-report=$report" -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          if (!$game.WaitForExit(60000)) {
+            Stop-Process -Id $game.Id -Force
+            throw 'The packaged app did not finish its launch check.'
+          }
+          Get-Content -LiteralPath $stdout,$stderr -ErrorAction SilentlyContinue
+          if ($game.ExitCode -ne 0) { throw "Packaged game check failed: $($game.ExitCode)" }
+          if (!(Test-Path -LiteralPath $report)) { throw 'The executable did not write its smoke report.' }
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          if ($result.ok -ne $true) { throw 'The executable reported a failed smoke check.' }
+          $result | ConvertTo-Json -Depth 5
+      - name: Add build information and checksum
+        shell: pwsh
+        run: |
+          $zip = 'release/Drunken-Joyride-Windows-x64.zip'
+          if (!(Test-Path -LiteralPath $zip)) { throw 'Windows ZIP was not produced.' }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Drunken-Joyride-Windows-x64.zip" | Set-Content -Encoding utf8 release/SHA256SUMS.txt
+          @(
+            'Drunken Joyride — Windows x64 test build'
+            "Commit: $env:GITHUB_SHA"
+            "Build: https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            'Extract the entire ZIP, then open Drunken Joyride.exe.'
+            'Keep the executable and its resources together. No Node.js or installation is needed.'
+            'This is an unsigned test build. Desktop gameplay works offline; ads are placeholders.'
+          ) | Set-Content -Encoding utf8 release/BUILD-INFO.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drunken-joyride-windows-${{ github.sha }}
+          path: |
+            release/Drunken-Joyride-Windows-x64.zip
+            release/SHA256SUMS.txt
+            release/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+  publish-preview:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: windows-preview-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: drunken-joyride-windows-${{ github.sha }}
+          path: release
+      - name: Publish the current main build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          current_head="$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)"
+          if [ "$current_head" != "$GITHUB_SHA" ]; then
+            echo 'A newer main build exists. Keeping this build as an Actions artifact.'
+            exit 0
+          fi
+          cat > release-notes.md <<EOF
+          Automatically built Windows x64 test version of Drunken Joyride.
+
+          Download the ZIP, extract **all files**, and launch **Drunken Joyride.exe**.
+          No installation or Node.js required. This is an unsigned test build.
+          Gameplay works offline. Desktop advertisement placements remain placeholders.
+
+          Commit: $GITHUB_SHA
+          Checks: game tests, production build, and a launch test of the packaged Windows executable.
+          Build details: https://github.com/$GH_REPO/actions/runs/$GITHUB_RUN_ID
+          EOF
+          if gh release view windows-preview >/dev/null 2>&1; then
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/windows-preview" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release upload windows-preview release/* --clobber
+            gh release edit windows-preview --title 'Drunken Joyride — latest Windows test build' --notes-file release-notes.md --prerelease
+          else
+            gh release create windows-preview release/* --target "$GITHUB_SHA" --title 'Drunken Joyride — latest Windows test build' --notes-file release-notes.md --prerelease
+          fi

@@ -25,16 +25,20 @@ let adResolve: ((result: boolean) => void) | undefined;
 let adTimer: ReturnType<typeof setInterval> | undefined;
 let displayAdCleanup: (()=>void)|undefined;
 let displayAdConsent=false;
-const displayAdConfig=getDisplayAdConfig();
+// The native build is an offline game; display ads belong to the hosted website.
+const displayAdConfig=['http:','https:'].includes(location.protocol)?getDisplayAdConfig():null;
+let peakCombo=1;
+let lastNearMisses=0;
+let riskTimer: ReturnType<typeof setTimeout>;
 
 $('#app').innerHTML = `
   <header class="site-header">
     <a class="brand" href="#" aria-label="Drunken Joyride home"><span class="brand-mark">${icon('car',29)}</span><span>DRUNKEN<span class="brand-light">JOYRiDE<span class="brand-dot">.</span></span></span></a>
     <nav aria-label="Main navigation"><button class="nav-button active" id="nav-play">${icon('road',17)} Drive</button><button class="nav-button" id="nav-garage">${icon('car',18)} Garage</button><button class="nav-button" id="nav-board">${icon('trophy',18)} Leaderboards</button></nav>
-    <div class="header-tools"><span class="arcade-badge">ENDLESS ARCADE</span><button class="icon-button" id="sound" aria-label="Toggle sound"></button><button class="icon-button" id="help" aria-label="How to play">${icon('help')}</button></div>
+    <div class="header-tools"><span class="arcade-badge">NIGHT SHIFT · V2.1</span><button class="icon-button" id="sound" aria-label="Toggle sound"></button><button class="icon-button" id="help" aria-label="How to play">${icon('help')}</button></div>
   </header>
   <main>
-    <section class="page-intro"><div><div class="eyebrow"><span class="tiny-line"></span> AFTER HOURS. ALL GAS.</div><h1>Bad decisions.<br><span>Great reflexes.</span></h1></div><div class="intro-side"><span class="route-tag">A2 &nbsp; / &nbsp; THE NETHERLANDS</span><p>Traffic. Roadworks. Questionable steering.<br>How long can you hold it together?</p></div></section>
+    <section class="page-intro"><div><div class="eyebrow"><span class="tiny-line"></span> AFTER HOURS. ALL GAS.</div><h1>Bad decisions.<br><span>Great reflexes.</span></h1></div><div class="intro-side"><span class="route-tag">A2 &nbsp; / &nbsp; THE NETHERLANDS</span><p>Cut tighter gaps. Chain bigger combos.<br>Speed is the easy part.</p></div></section>
     <section class="banner-slot" id="banner" aria-label="Advertisement">
       <div class="ad-rail"><span class="ad-label">ADVERTISEMENT</span><span id="ad-status">NOT CONNECTED</span></div>
       <div id="display-ad"></div>
@@ -43,21 +47,21 @@ $('#app').innerHTML = `
     <div id="play-view">
       <div class="play-layout">
         <section class="game-section" aria-label="Drunken Joyride game">
-          <div class="game-bar"><span><span class="live-dot"></span> LIVE RUN <span class="bar-divider">/</span> A2 AFTER DARK</span><span id="pace">LEVEL 01</span></div>
+          <div class="game-bar"><span><span class="live-dot"></span> LIVE RUN <span class="bar-divider">/</span> A2 AFTER DARK</span><span id="pace">CITY RUN · LV 01</span></div>
           <div class="drive-shell" id="drive-shell">
             <canvas id="game" tabindex="0" aria-label="Game area. Left and right arrows or A and D to steer. P to pause."></canvas>
-            <div class="game-hud" hidden id="hud"><div><span>OBSTACLES CLEARED</span><strong id="live-score">0</strong></div><div class="distance-readout"><span>DISTANCE</span><strong id="distance">0 <small>m</small></strong></div><button class="icon-button" id="pause" aria-label="Pause game">${icon('pause')}</button></div>
-            <div class="game-overlay" id="ready"><div class="takeoff-tag">NO BRAKES. JUST REFLEXES.</div><h2>Own the night.<br>Dodge the chaos.</h2><p>Three lanes. One questionable ride.<br>Keep clear of traffic and roadworks.</p><button class="primary" id="start">Hit the road ${icon('arrow')}</button><span class="start-hint">ARROWS / A &amp; D TO STEER <span>·</span> SPACE TO START</span></div>
+            <div class="game-hud" hidden id="hud"><div><span>SCORE <b id="combo">×1</b></span><strong id="live-score">0</strong></div><div class="speed-readout"><strong id="speed">0</strong><span>KM/H</span></div><div class="distance-readout"><span>DISTANCE</span><strong id="distance">0 <small>m</small></strong></div><button class="icon-button" id="pause" aria-label="Pause game">${icon('pause')}</button></div>
+            <div class="risk-callout" id="risk-callout" hidden>NEAR MISS</div><div class="game-overlay" id="ready"><div class="takeoff-tag">NO BRAKES. JUST REFLEXES.</div><h2>Thread the gap.<br>Own the night.</h2><p>Hold to steer. Cut gaps. Chain near misses.<br>Boost harder. Risk everything.</p><button class="primary" id="start">Hit the road ${icon('arrow')}</button><span class="start-hint">HOLD ARROWS / A &amp; D <span>·</span> SPACE TO BOOST</span></div>
             <div class="game-overlay pause-overlay" id="paused" hidden><span class="takeoff-tag">PULL OVER FOR A SECOND</span><h2>Engine idling.</h2><p>Your run is safe right here.</p><button class="primary" id="resume">Keep driving ${icon('play')}</button></div>
             <div class="game-bottom-label"><span>DRUNKEN JOYRIDE</span><span>ALL SKILL. NO BRAKES.</span></div>
           </div>
-          <div class="steering-controls" aria-label="Touch steering"><button id="steer-left" aria-label="Steer left"><span>←</span> LEFT</button><span>${icon('steer',25)}<small>STEER</small></span><button id="steer-right" aria-label="Steer right">RIGHT <span>→</span></button></div>
-          <div class="controls-strip"><span><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> to steer</span><span><kbd>P</kbd> to pause</span></div>
+          <div class="steering-controls" aria-label="Touch steering"><button id="steer-left" aria-label="Steer left"><span>←</span> LEFT</button><button class="boost-control" id="boost" aria-label="Activate boost"><span>${icon('spark',23)} BOOST</span><span class="boost-track"><i id="boost-fill"></i></span><small id="boost-caption">SPACE / SHIFT</small></button><button id="steer-right" aria-label="Steer right">RIGHT <span>→</span></button></div>
+          <div class="controls-strip"><span><kbd>←</kbd><kbd>→</kbd> HOLD TO STEER</span><span><kbd>SPACE</kbd> BOOST</span><span><kbd>P</kbd> PAUSE</span></div>
         </section>
         <aside class="sidebar">
-          <section class="best-card"><div class="best-icon">${icon('trophy',25)}</div><div><span class="eyebrow">YOUR BEST RUN</span><strong id="best">0 <small>cleared</small></strong></div><span class="small-note">BEAT<br>YOURSELF.</span></section>
+          <section class="best-card"><div class="best-icon">${icon('trophy',25)}</div><div><span class="eyebrow">YOUR BEST RUN</span><strong id="best">0 <small>points</small></strong></div><span class="small-note">BEAT<br>YOURSELF.</span></section>
           <section class="garage-card" id="garage"><div class="section-heading"><div><span class="eyebrow">CHOOSE YOUR BAD IDEA</span><h2>The garage<span>.</span></h2></div><span id="collection-count" class="count-pill"></span></div><div class="car-grid" id="skins"></div><div class="selected-car" id="car-detail"></div></section>
-          <section class="tip-card"><span class="tip-icon">${icon('gauge',23)}</span><div><h3>The road doesn't get easier.</h3><p>Faster traffic. Bigger roadblocks. Less room for mistakes. Stay sharp and find the open lane.</p></div></section>
+          <section class="contracts-card"><div class="section-heading"><div><span class="eyebrow">MAKE THIS RUN COUNT</span><h3>Night contracts</h3></div><span class="count-pill" id="contract-count">0 / 3</span></div><div class="contract" id="contract-near"><div><strong>Needlework</strong><span>3 near misses</span></div><span class="contract-progress" id="near-progress">0 / 3</span></div><div class="contract" id="contract-distance"><div><strong>Long way home</strong><span>Drive 400 metres</span></div><span class="contract-progress" id="distance-progress">0 / 400</span></div><div class="contract" id="contract-combo"><div><strong>Risk collector</strong><span>Reach a ×4 combo</span></div><span class="contract-progress" id="combo-progress">×1 / ×4</span></div><p>Close passes build combo and recharge boost. A boost makes you faster, not invincible.</p></section>
           <button class="leaderboard-link" id="quick-board"><span>${icon('globe')} See who owns the night</span>${icon('arrow')}</button>
           <button class="remove-trigger garage-remove">${icon('shield',16)} Remove ads · preview</button>
         </aside>
@@ -72,7 +76,7 @@ $('#app').innerHTML = `
     </section>
   </main>
   <footer><span>A fictional arcade trip. Made for one more run.</span><span class="footer-brand">DRUNKEN JOYRIDE <span class="orange-dot"></span> AFTER HOURS ARCADE</span><button class="text-button" id="about">About &amp; ads</button></footer>
-  <dialog id="over-dialog" class="over-dialog" aria-label="Run over"><button class="dialog-x" id="close-over" aria-label="Close game over">${icon('close')}</button><div class="over-layout"><section><span class="eyebrow" id="over-eyebrow">THAT'LL LEAVE A MARK</span><h2>Wrecked.<br>Run it back?</h2><p class="over-subtitle">The road won this round.</p><div class="score-pair"><div><span>THIS RUN</span><strong id="final-score">0</strong></div><div><span>PERSONAL BEST</span><strong id="final-best">0</strong></div></div><p class="unlock-notice" id="unlock-notice" hidden></p><button class="primary full" id="restart">One more run ${icon('restart')}</button><button class="secondary full" id="continue">${icon('wrench',17)} Repair &amp; continue · demo</button><span class="fine-print">One repair per run. Reward ad is a demo.</span><button class="text-button remove-trigger">Remove ads · preview</button></section><section class="over-board"><div class="section-heading"><div><span class="eyebrow">WORLDWIDE · ALL TIME</span><h3>Top 10 drivers</h3></div>${icon('trophy',23)}</div><form id="score-form"><div class="name-row"><label>Your driver name<input id="driver-name" maxlength="20" placeholder="e.g. Midnight Racer" required autocomplete="nickname"></label><label>Continent<select id="driver-continent"></select></label></div><button class="secondary full" type="submit" id="submit-score">Save my run ${icon('arrow',17)}</button><p id="submit-status" class="fine-print" role="status"></p></form><p class="fine-print demo-caption">LOCAL DEMO · samples are marked</p><div id="over-table" class="over-table"></div><button class="text-button" id="over-all-boards">Explore all leaderboards ${icon('arrow',16)}</button></section></div></dialog>
+  <dialog id="over-dialog" class="over-dialog" aria-label="Run over"><button class="dialog-x" id="close-over" aria-label="Close game over">${icon('close')}</button><div class="over-layout"><section><span class="eyebrow" id="over-eyebrow">THAT'LL LEAVE A MARK</span><h2>Wrecked.<br>Run it back?</h2><p class="over-subtitle">The road won this round.</p><div class="score-pair"><div><span>THIS RUN</span><strong id="final-score">0</strong></div><div><span>PERSONAL BEST</span><strong id="final-best">0</strong></div></div><div class="run-stats"><div><strong id="final-distance">0m</strong><span>DISTANCE</span></div><div><strong id="final-near">0</strong><span>NEAR MISSES</span></div><div><strong id="final-combo">×1</strong><span>PEAK COMBO</span></div></div><p class="run-verdict" id="run-verdict">Keep it close. Keep it clean.</p><p class="unlock-notice" id="unlock-notice" hidden></p><button class="primary full" id="restart">One more run ${icon('restart')}</button><button class="secondary full" id="continue">${icon('wrench',17)} Repair &amp; continue · demo</button><span class="fine-print">One repair per run. Reward ad is a demo.</span><button class="text-button remove-trigger">Remove ads · preview</button></section><section class="over-board"><div class="section-heading"><div><span class="eyebrow">WORLDWIDE · ALL TIME</span><h3>Top 10 drivers</h3></div>${icon('trophy',23)}</div><form id="score-form"><div class="name-row"><label>Your driver name<input id="driver-name" maxlength="20" placeholder="e.g. Midnight Racer" required autocomplete="nickname"></label><label>Continent<select id="driver-continent"></select></label></div><button class="secondary full" type="submit" id="submit-score">Save my run ${icon('arrow',17)}</button><p id="submit-status" class="fine-print" role="status"></p></form><p class="fine-print demo-caption">LOCAL DEMO · samples are marked</p><div id="over-table" class="over-table"></div><button class="text-button" id="over-all-boards">Explore all leaderboards ${icon('arrow',16)}</button></section></div></dialog>
   <dialog id="info-dialog" class="info-dialog" aria-label="Game information"><button class="dialog-x" data-close="info-dialog" aria-label="Close information">${icon('close')}</button><div id="info-content"></div></dialog>
   <dialog id="ad-dialog" class="info-dialog ad-dialog" aria-label="Simulated reward advertisement"><span class="eyebrow">AD PROVIDER PREVIEW</span><div class="demo-ad-art">${carSvg(SKINS[0],100)}<span>Pit stop.<br>Big comeback.</span></div><h2 id="ad-heading">Rewarded ad demo</h2><p>This is a simulated reward placement. No real video ad is connected and no money is charged.</p><button class="primary full" id="ad-complete" disabled>Complete demo</button><button class="text-button" id="ad-cancel">Cancel · no reward</button></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
@@ -81,7 +85,7 @@ $('#app').innerHTML = `
 function persist() { saveProfile(profile); }
 function notify(message: string) { clearTimeout(toastTimer); $('#toast').textContent=message; $('#toast').hidden=false; toastTimer=setTimeout(()=>$('#toast').hidden=true,4000); }
 function updateProfileUI() {
-  $('#best').innerHTML=`${profile.best} <small>cleared</small>`;
+  $('#best').innerHTML=`${profile.best} <small>points</small>`;
   $('#sound').innerHTML=icon(profile.sound ? 'sound':'mute');
   $('#sound').setAttribute('aria-label', profile.sound ? 'Mute sound' : 'Enable sound');
   $('#sound').setAttribute('aria-pressed',String(profile.sound));
@@ -101,6 +105,7 @@ const engine = new GameEngine($('#game'), {skin:selected,sound:profile.sound,onS
 },onGameOver:finishRun,onStateChange:status=>{
   $('#ready').hidden=status!=='ready'; $('#paused').hidden=status!=='paused'; $('#hud').hidden=status==='ready'||status==='over';
   document.body.classList.toggle('in-run',status==='playing');
+  if(status!=='playing')clearControls();
 }});
 const ads = new DemoAdProvider(runAdDemo,{adsDisabled:profile.adsRemoved});
 
@@ -113,7 +118,7 @@ function runAdDemo(placement: AdPlacement): Promise<boolean> {
     const complete=$<HTMLButtonElement>('#ad-complete'); complete.disabled=true;complete.textContent=`Demo ready in ${seconds}…`;
     $('#ad-cancel').textContent=rewarded?'Cancel · no reward':'Skip demo';
     $<HTMLDialogElement>('#ad-dialog').showModal();
-    adTimer=setInterval(()=>{seconds--;complete.textContent=seconds>0?`Demo ready in ${seconds}…`:rewarded?'Complete demo & claim reward':'Back to the sky';if(seconds<=0){clearInterval(adTimer);complete.disabled=false;}},1000);
+    adTimer=setInterval(()=>{seconds--;complete.textContent=seconds>0?`Demo ready in ${seconds}…`:rewarded?'Complete demo & claim reward':'Back to the road';if(seconds<=0){clearInterval(adTimer);complete.disabled=false;}},1000);
   });
 }
 function closeAd(complete: boolean) { clearInterval(adTimer);$<HTMLDialogElement>('#ad-dialog').close();const resolve=adResolve;adResolve=undefined;resolve?.(complete); }
@@ -129,11 +134,18 @@ async function startRun() {
   // Run IDs deduplicate local submissions; they are not security credentials.
   runId=globalThis.crypto?.randomUUID?.() ?? `run-${Date.now()}-${Math.random().toString(36).slice(2)}`; continued=false;lastScore=0;
   $('#submit-status').textContent='';$<HTMLButtonElement>('#submit-score').disabled=false;
-  setView('play'); engine.start();starting=false;
+  setView('play'); peakCombo=1;lastNearMisses=0;clearTimeout(riskTimer);$('#risk-callout').hidden=true;clearControls();engine.start();starting=false;updateTelemetry();
   $('#drive-shell').scrollIntoView({behavior:'instant',block:'center'});
   $('#game').focus({preventScroll:true});
 }
 function finishRun(score: number) {
+  updateTelemetry();
+  const snapshot=engine.getSnapshot();
+  $('#final-distance').textContent=Math.floor(snapshot.distance/10)+'m';
+  $('#final-near').textContent=String(snapshot.nearMisses);
+  $('#final-combo').textContent='×'+peakCombo;
+  const completed=[snapshot.nearMisses>=3,snapshot.distance>=4000,peakCombo>=4].filter(Boolean).length;
+  $('#run-verdict').textContent=completed===3?'NIGHT SHIFT COMPLETE · 3/3 CONTRACTS':completed>0?`${completed}/3 CONTRACTS COMPLETE · RUN IT BACK`:snapshot.distance>1200?'GOOD PACE. NOW CHASE THE NEAR MISSES.':'THE NIGHT DOES NOT GIVE SECOND CHANCES.';
   lastScore=score; const oldBest=profile.best;
   profile.best=Math.max(profile.best,score);
   const newly=SKINS.filter(s=>score>=s.unlockScore&&!unlocked(s.id));
@@ -159,44 +171,87 @@ function showReadyAfterOver() {
 }
 $('#over-dialog').addEventListener('cancel',()=>showReadyAfterOver());
 
-// Discrete lane controls are shared by keyboard, road taps, swipes and touch buttons.
-function steer(direction: -1 | 1) {
-  if(view!=='play'||document.querySelector('dialog[open]'))return;
-  if(engine.getSnapshot().status==='playing')engine.steer(direction);
+// Input state is continuous; release/cancel/blur always neutralises the steering.
+const heldKeys=new Set<string>();
+let touchSteering: -1|0|1=0;
+let roadPointer: number|null=null;
+function gameHasInput(){return view==='play'&&!document.querySelector('dialog[open]')&&engine.getSnapshot().status==='playing';}
+function updateSteering(){
+  const left=heldKeys.has('ArrowLeft')||heldKeys.has('KeyA');
+  const right=heldKeys.has('ArrowRight')||heldKeys.has('KeyD');
+  engine.setSteering(touchSteering||((Number(right)-Number(left)) as -1|0|1));
+}
+function clearControls(){heldKeys.clear();touchSteering=0;roadPointer=null;engine.setSteering(0);engine.setTargetX(null);}
+function activateBoost(){
+  if(!gameHasInput())return;
+  if(!engine.boost())notify('Boost needs 35 charge. Pass traffic closely to refill.');
   $('#game').focus({preventScroll:true});
 }
-let pointerStart: {x:number;y:number}|null=null;
+$('#boost').onclick=activateBoost;
+function targetPointer(e:PointerEvent){
+  const bounds=$('#game').getBoundingClientRect();
+  engine.setTargetX((e.clientX-bounds.left)/bounds.width);
+}
 $('#drive-shell').addEventListener('pointerdown',e=>{
   if((e.target as HTMLElement).closest('button')||document.querySelector('dialog[open]'))return;
-  e.preventDefault();pointerStart={x:e.clientX,y:e.clientY};
+  e.preventDefault();roadPointer=e.pointerId;$('#drive-shell').setPointerCapture(e.pointerId);
+  if(gameHasInput()){targetPointer(e);$('#game').focus({preventScroll:true});}
 });
+$('#drive-shell').addEventListener('pointermove',e=>{if(roadPointer===e.pointerId&&gameHasInput())targetPointer(e);});
 $('#drive-shell').addEventListener('pointerup',e=>{
-  if(!pointerStart)return;const origin=pointerStart;pointerStart=null;
+  if(roadPointer!==e.pointerId)return;
+  roadPointer=null;engine.setTargetX(null);
   if((e.target as HTMLElement).closest('button')||view!=='play'||document.querySelector('dialog[open]'))return;
   const status=engine.getSnapshot().status;
-  if(status==='ready'||status==='over'){void startRun();return;}
-  if(status!=='playing')return;
-  const bounds=$('#game').getBoundingClientRect();const delta=e.clientX-origin.x;
-  steer(Math.abs(delta)>24?(delta<0?-1:1):(e.clientX<bounds.left+bounds.width/2?-1:1));
+  if(status==='ready'||status==='over')void startRun();
 });
-$('#drive-shell').addEventListener('pointercancel',()=>pointerStart=null);
-$('#steer-left').onpointerdown=e=>{e.preventDefault();steer(-1);};
-$('#steer-right').onpointerdown=e=>{e.preventDefault();steer(1);};
-$('#steer-left').onclick=e=>{if(e.detail===0)steer(-1);};
-$('#steer-right').onclick=e=>{if(e.detail===0)steer(1);};
+$('#drive-shell').addEventListener('pointercancel',()=>{roadPointer=null;engine.setTargetX(null);});
+for(const [id,direction] of [['steer-left',-1],['steer-right',1]] as const){
+  const button=$('#'+id);
+  button.onpointerdown=e=>{e.preventDefault();if(!gameHasInput())return;touchSteering=direction;button.setPointerCapture(e.pointerId);updateSteering();$('#game').focus({preventScroll:true});};
+  button.onpointerup=()=>{touchSteering=0;updateSteering();};
+  button.onpointercancel=()=>{touchSteering=0;updateSteering();};
+  button.onlostpointercapture=()=>{touchSteering=0;updateSteering();};
+  // Keyboard activation of a focused touch button gives one short steering pulse.
+  button.onclick=e=>{if(e.detail!==0||!gameHasInput())return;engine.steer(direction);$('#game').focus({preventScroll:true});};
+}
 document.addEventListener('keydown',e=>{
   if((e.target as HTMLElement).closest('input,select,textarea,button,a')||document.querySelector('dialog[open]')||view!=='play')return;
-  if(['ArrowLeft','ArrowRight','KeyA','KeyD','Space','KeyP','Escape'].includes(e.code))e.preventDefault();
+  if(['ArrowLeft','ArrowRight','KeyA','KeyD','Space','ShiftLeft','ShiftRight','KeyP','Escape'].includes(e.code))e.preventDefault();
+  if(['ArrowLeft','ArrowRight','KeyA','KeyD'].includes(e.code)){if(gameHasInput()){heldKeys.add(e.code);updateSteering();}return;}
   if(e.repeat)return;
-  if(e.code==='ArrowLeft'||e.code==='KeyA')steer(-1);
-  if(e.code==='ArrowRight'||e.code==='KeyD')steer(1);
-  if(e.code==='Space'){const status=engine.getSnapshot().status;if(status==='ready'||status==='over')void startRun();}
+  if(e.code==='Space'){const status=engine.getSnapshot().status;if(status==='ready'||status==='over')void startRun();else if(status==='playing')activateBoost();}
+  if(e.code==='ShiftLeft'||e.code==='ShiftRight')activateBoost();
   if(e.code==='KeyP'||e.code==='Escape'){const status=engine.getSnapshot().status;if(status==='playing')engine.pause();else if(status==='paused')engine.resume();}
 });
-
+document.addEventListener('keyup',e=>{heldKeys.delete(e.code);updateSteering();});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseGame();});
 window.addEventListener('blur',pauseGame);
-setInterval(()=>{const snapshot=engine.getSnapshot();$('#pace').textContent=`LEVEL ${String(snapshot.difficulty.level).padStart(2,'0')}`;$('#distance').innerHTML=`${Math.floor(snapshot.distance/10)} <small>m</small>`;},250);
+function updateTelemetry(){
+  const snapshot=engine.getSnapshot();
+  peakCombo=Math.max(peakCombo,snapshot.combo);
+  $('#pace').textContent=snapshot.sector+' · LV '+String(snapshot.difficulty.level).padStart(2,'0');
+  $('#distance').innerHTML=`${Math.floor(snapshot.distance/10)} <small>m</small>`;
+  $('#speed').textContent=String(Math.round(snapshot.speedKph));
+  $('#combo').textContent='×'+snapshot.combo;
+  $('#combo').classList.toggle('hot',snapshot.combo>1);
+  $('#boost-fill').style.width=snapshot.boostCharge+'%';
+  $('#boost-caption').textContent=snapshot.boostActive?'BOOST ACTIVE':Math.floor(snapshot.boostCharge)+'% · SPACE / SHIFT';
+  $<HTMLButtonElement>('#boost').disabled=snapshot.status!=='playing'||snapshot.boostCharge<35||snapshot.boostActive;
+  $('#boost').classList.toggle('boosting',snapshot.boostActive);
+  if(snapshot.nearMisses>lastNearMisses&&snapshot.status==='playing'){
+    clearTimeout(riskTimer);$('#risk-callout').textContent='NEAR MISS · ×'+snapshot.combo;$('#risk-callout').hidden=false;
+    riskTimer=setTimeout(()=>$('#risk-callout').hidden=true,1100);
+  }
+  lastNearMisses=snapshot.nearMisses;
+  const goals=[snapshot.nearMisses>=3,snapshot.distance>=4000,peakCombo>=4];
+  $('#near-progress').textContent=Math.min(3,snapshot.nearMisses)+' / 3';
+  $('#distance-progress').textContent=Math.min(400,Math.floor(snapshot.distance/10))+' / 400';
+  $('#combo-progress').textContent='×'+Math.min(4,peakCombo)+' / ×4';
+  ['near','distance','combo'].forEach((key,i)=>$('#contract-'+key).classList.toggle('complete',goals[i]));
+  $('#contract-count').textContent=goals.filter(Boolean).length+' / 3';
+}
+setInterval(updateTelemetry,100);
 
 $('#skins').onclick=e=>{
   const button=(e.target as HTMLElement).closest<HTMLButtonElement>('[data-skin]');if(!button)return;
@@ -216,6 +271,7 @@ function setView(next: typeof view) {
   if(next!=='play')pauseGame();view=next;
   $('#play-view').hidden=next!=='play';$('#leaderboard-view').hidden=next!=='leaderboard';
   if(next==='play'&&engine.getSnapshot().status==='over')showReadyAfterOver();
+  if(next==='play')$('#game').focus({preventScroll:true});
   $('#nav-play').classList.toggle('active',next==='play');$('#nav-board').classList.toggle('active',next==='leaderboard');
   if(next==='leaderboard')void loadBoard();
 }
@@ -249,7 +305,7 @@ $('#score-form').onsubmit=async e=>{e.preventDefault();const button=$<HTMLButton
 }catch{button.disabled=false;$('#submit-status').textContent='Could not save. Please try again.';}};
 
 function info(content: string){pauseGame();$('#info-content').innerHTML=content;$<HTMLDialogElement>('#info-dialog').showModal();}
-$('#help').onclick=()=>info(`<span class="eyebrow">CRASH COURSE</span><h2>Keep it between the lines.</h2><p>Use <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> to change lanes. On a phone, tap the left/right buttons, tap a side of the road, or swipe across the road.</p><p>Your car sways a little. Stay sharp: dodge random cars, cones and roadwork barricades. Clear an obstacle row to score a point. A crash ends your run.</p><p>Press <kbd>SPACE</kbd> to start or restart. Use <kbd>P</kbd> or <kbd>ESC</kbd> to pause. Leaving the tab also pauses the game.</p><p>Pick your car in the garage before starting. Unlock eight rides with score milestones or an optional reward demo. Speed rises, obstacles grow and the open lane gets tighter as you go.</p>`);
+$('#help').onclick=()=>info(`<span class="eyebrow">CRASH COURSE · NIGHT SHIFT</span><h2>Close counts.<br>Contact doesn't.</h2><p><strong>Hold</strong> <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> to steer freely across the road. On a phone, hold the left/right controls or drag your car's target across the road.</p><p>Pass close to traffic to earn <strong>near misses</strong>. They grow your combo up to ×5 and refill boost. Combo fades when you stop taking risks. Watch traffic indicators: other drivers can change lanes.</p><p>Press <kbd>SPACE</kbd> or <kbd>SHIFT</kbd>, or tap BOOST, to spend 35 charge on a burst of speed. Boost adds speed and scoring potential; it never makes you invincible.</p><p>City streets, canal expressways, tunnels and roadworks change the rhythm. Trucks, narrowing gaps and denser traffic demand real steering. Clear the three night contracts for a complete run.</p><p>Press <kbd>SPACE</kbd> to start/restart; <kbd>P</kbd> or <kbd>ESC</kbd> pauses. One optional rewarded repair is available per run. Car unlocks stay cosmetic.</p>`);
 $('#sound').onclick=()=>{profile.sound=!profile.sound;persist();engine.setSound(profile.sound);updateProfileUI();if(engine.getSnapshot().status==='playing')$('#game').focus({preventScroll:true});};
 document.querySelectorAll('.remove-trigger').forEach(b=>b.addEventListener('click',()=>info(`<span class="eyebrow">MORE ROAD, FEWER INTERRUPTIONS</span><h2>Drive ad-free.</h2><p>This is a purchase-flow placeholder. No payment is collected. Try the ad-free experience on this browser: it hides the banner and between-run demos. Optional rewarded demos remain available.</p><button class="primary full" id="toggle-ads">${profile.adsRemoved?'Restore ad demo placements':'Enable ad-free preview'}</button><span class="fine-print">Preview only · no charge · no real purchase</span>`)));
 $('#info-content').addEventListener('click',e=>{if((e.target as HTMLElement).closest('#toggle-ads')){profile.adsRemoved=!profile.adsRemoved;ads.setAdsDisabled(profile.adsRemoved);persist();updateProfileUI();refreshDisplayAd();$<HTMLDialogElement>('#info-dialog').close();notify(profile.adsRemoved?'Ad-free preview enabled.':'Demo ad placements restored.');}});

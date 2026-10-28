@@ -1,19 +1,49 @@
 # Drunken Joyride
 
-A midnight arcade drive through Dutch roads. Dodge random traffic and roadworks, switch lanes, collect new cars, and chase one more personal best. Built with TypeScript, Vite, and Canvas 2D.
+A midnight arcade drive through Dutch roads. Weave through moving traffic, thread roadworks, build near-miss combos, and spend your boost on one more personal best. Built with TypeScript, Vite, and Canvas 2D.
 
 **[Play Drunken Joyride online](https://sjorswakka-sketch.github.io/flappy-nederland/)** · No installation needed. The existing repository and URL are retained after the redesign.
+
+## Download the Windows test build
+
+**[Download Windows x64 ZIP](https://github.com/sjorswakka-sketch/flappy-nederland/releases/download/windows-preview/Drunken-Joyride-Windows-x64.zip)** · [Latest Windows preview and build details](https://github.com/sjorswakka-sketch/flappy-nederland/releases/tag/windows-preview)
+
+1. Download `Drunken-Joyride-Windows-x64.zip` from the GitHub release.
+2. Extract the **entire ZIP** into a folder.
+3. Open **`Drunken Joyride.exe`** in that folder on Windows 10 or 11, 64-bit.
+
+No installer, Node.js, or local web server is needed to play. Keep the executable alongside its extracted resources; copying only the `.exe` does not produce a working app. This is an unsigned test build.
+
+The game is bundled with Electron and gameplay works offline. Desktop records and car unlocks are stored separately from browser progress. Website AdSense integration is intended for the hosted browser game; the Windows version keeps advertisement placeholders.
+
+Every push to `main` and every pull request creates a Windows build in [GitHub Actions](https://github.com/sjorswakka-sketch/flappy-nederland/actions). A successful main build updates the downloadable `windows-preview` prerelease after tests and a launch check of the packaged app pass. Each run also retains a commit-specific Actions artifact; pull-request builds are available there without updating the public preview. The workflow can be started manually from the Actions tab.
+
+To build or run the desktop app from source on Windows:
+
+```sh
+npm ci
+npm run desktop:dev
+```
+
+`desktop:dev` builds the current web game and opens it in Electron. To produce the distributable ZIP instead:
+
+```sh
+npm run desktop:build
+```
+
+The ZIP is written to `release/`. Build logs and checks are available in the corresponding GitHub Actions run.
 
 ## How to play
 
 1. Choose a car in the garage. The Rust Bucket is available from the beginning.
-2. Start a run. Use **Left/Right arrows** or **A/D** to switch between three lanes.
-3. On a phone, use the left/right controls or swipe across the road. Find the open lane between traffic and roadworks.
-4. Each safely passed obstacle row adds a point. Crashing ends the run. The car has a small, predictable sway; lane changes remain under your control.
-5. Press **P** or **Escape**, or use the pause button, to pause. Leaving the tab also pauses. Use **Space** to start or restart.
-6. At game over, enter a driver name and continent, save the score, check the top ten, and try again. An optional reward demo offers one extra life per run.
+2. Start a run. **Hold Left/Right arrows or A/D** to steer continuously across the road. The car sways, so keep correcting your line.
+3. On a phone, hold the left/right controls or drag across the road. Find a gap between cars, trucks, and roadworks; watch for traffic indicating a lane change.
+4. Pass obstacles to score. Close passes earn near-miss points and grow a combo up to **5×**; the combo drops if you leave too long between near misses. A collision still ends the run.
+5. During a run, press **Space or Shift** to use boost. Boost spends charge, makes the road arrive faster, and doubles obstacle-row points. Overtakes and near misses recover charge. Boost does **not** protect you from crashes.
+6. Press **P** or **Escape**, or use the pause button, to pause. Leaving the tab also pauses. Use **Space** to start or restart when a run is not active.
+7. Chase the run targets for distance, near misses, and combo. At game over, review your distance, near misses, and best combo, then enter a driver name and continent, save the score, check the top ten, and try again. An optional reward demo offers one repair and continuation per run.
 
-Speed, traffic frequency, and obstacle sizes increase with distance. Generated rows leave an open route, but the next safe lane can change.
+Speed, traffic frequency, and obstacle sizes increase with distance. Sectors rotate through **City Run, Canal Express, Tunnel Vision, and Roadworks**, changing the scene and available road width. Generated traffic leaves a route, but you must react to moving vehicles and shrinking margins.
 
 Car choice, sound preference, best score, unlocked cars, and submitted scores stay on this browser. Storage failures do not prevent playing, but progress may then last only for the session. Clearing site data resets progress. New `drunken-joyride:*` storage keys keep driving scores separate from the previous game.
 
@@ -40,9 +70,11 @@ Open the preview URL, normally **http://localhost:4173**. Deploy the generated `
 
 ## Features
 
-- Top-down, three-lane endless driving with traffic cars, striped road barriers, cones, and Dutch highway details.
-- Frame-rate independent physics, responsive high-DPI rendering, touch/swipe and keyboard controls.
-- Smooth lane changes, comic car sway, optional synthesized sound, pause, crash, restart, and one rewarded continuation.
+- Top-down endless driving with traffic cars, trucks, lane-changing vehicles, striped barriers, cones, and Dutch highway details.
+- Frame-rate independent physics, responsive high-DPI rendering, continuous keyboard steering, and hold/drag touch controls.
+- Near-miss combos, charge-based boost, moving traffic, and rotating road sectors that alter the available space.
+- Run targets and a results summary showing distance, near misses, and peak combo.
+- Comic car sway, optional synthesized sound, pause, crash, restart, and one rewarded repair per run.
 - Eight unlockable cars with different bodies, colors, lights, and effects.
 - Indefinite distance-based difficulty progression, with tuning in one module.
 - Local best scores, car unlocks, and top tens for worldwide, continent, daily, weekly, and monthly views.
@@ -50,11 +82,11 @@ Open the preview URL, normally **http://localhost:4173**. Deploy the generated `
 
 ## Cars and difficulty tuning
 
-The garage is defined in [`src/data/skins.ts`](src/data/skins.ts). Cars unlock at scores **0, 5, 10, 20, 35, 50, 75, and 100**: Rust Bucket, Midnight GT, Bubblegum, Taxi, Road King, Mint Condition, Blackout, and Neon Runner. Locked cars can also be unlocked by completing an explicitly labelled reward demo. Cancelling a demo grants no reward.
+The garage is defined in [`src/data/skins.ts`](src/data/skins.ts). Cars unlock at scores **0, 25, 75, 150, 300, 500, 800, and 1200**: Rust Bucket, Midnight GT, Bubblegum, Taxi, Road King, Mint Condition, Blackout, and Neon Runner. Previously unlocked cars stay unlocked after an update. Locked cars can also be unlocked by completing an explicitly labelled reward demo. Cancelling a demo grants no reward.
 
 Add a car with a unique stable ID, name, body/trim/accent colors, shape, effect, and `unlockScore`. The `round`, `slim`, and `royal` values select the supplied body styles. Update both the game renderer and [`src/car.ts`](src/car.ts) when adding new shapes or effects.
 
-Tune progression in [`src/game/difficulty.ts`](src/game/difficulty.ts). Speed rises smoothly without a final level; spawn timing and obstacle geometry approach configured bounds instead of becoming negative or covering the entire road. Physics, road layout, safe-row generation, collision detection, and drawing live in [`src/game/engine.ts`](src/game/engine.ts). Fixed simulation steps reduce differences between refresh rates. Extremely long runs are intentionally very difficult.
+Tune progression in [`src/game/difficulty.ts`](src/game/difficulty.ts). Speed rises smoothly without a final level; spawn timing and obstacle geometry approach configured bounds instead of becoming negative or covering the entire road. Physics, continuous steering, traffic movement, sector layout, boost, combo scoring, collision detection, and drawing live in [`src/game/engine.ts`](src/game/engine.ts). Fixed simulation steps reduce differences between refresh rates. Extremely long runs are intentionally very difficult.
 
 ## Advertisements and real revenue
 
@@ -99,6 +131,8 @@ public/          # Static assets
 .github/workflows/
   ci.yml         # Tests and production build
   pages.yml      # Build and deploy GitHub Pages
+  windows.yml    # Windows package, launch check, and preview release
+desktop/         # Electron window and Windows packaging configuration
 ```
 
 GitHub Pages uses GitHub Actions. Pushing to `main` runs tests, builds the app, and publishes `dist/`. The deployment workflow can also run manually in the Actions tab. Relative asset paths support the existing `/flappy-nederland/` URL and other static hosts. Forks must select **Settings → Pages → Source → GitHub Actions**. See the [official Pages workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
