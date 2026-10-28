@@ -1,5 +1,9 @@
-/** Add a bird here to make it available to the renderer and skin picker. */
-export interface BirdSkin {
+/**
+ * The garage is data-driven. Add a stable ID and a score milestone here.
+ * Shapes are shared by both renderers: round = compact, slim = sports car,
+ * royal = luxury coupe. `wing` is retained as the trim/detail colour.
+ */
+export interface VehicleSkin {
   id: string;
   name: string;
   body: string;
@@ -10,13 +14,13 @@ export interface BirdSkin {
   unlockScore: number;
 }
 
-export const SKINS: BirdSkin[] = [
-  { id: 'oranje', name: 'Oranje', body: '#F87932', wing: '#D65228', accent: '#FFE4AA', shape: 'round', effect: 'none', unlockScore: 0 },
-  { id: 'delft', name: 'Delft Blue', body: '#427DAA', wing: '#24527A', accent: '#EAF6F8', shape: 'round', effect: 'none', unlockScore: 5 },
-  { id: 'tulip', name: 'Tulip', body: '#E98598', wing: '#BC526F', accent: '#FCE4BD', shape: 'slim', effect: 'none', unlockScore: 10 },
-  { id: 'stroopwafel', name: 'Stroopwafel', body: '#C38B4C', wing: '#805133', accent: '#FFE4A0', shape: 'round', effect: 'none', unlockScore: 20 },
-  { id: 'koning', name: 'The King', body: '#EAB744', wing: '#CE8130', accent: '#FFF5C2', shape: 'royal', effect: 'sparkle', unlockScore: 35 },
-  { id: 'polder', name: 'Polder Mint', body: '#79BA9C', wing: '#398670', accent: '#E5F3CA', shape: 'slim', effect: 'trail', unlockScore: 50 },
-  { id: 'nacht', name: 'Midnight', body: '#45516D', wing: '#293B58', accent: '#C9D9EB', shape: 'slim', effect: 'sparkle', unlockScore: 75 },
-  { id: 'aurora', name: 'Northern Light', body: '#A695CB', wing: '#6B66A4', accent: '#C9F4DC', shape: 'royal', effect: 'trail', unlockScore: 100 },
+export const SKINS: VehicleSkin[] = [
+  { id: 'starter', name: 'Rust Bucket', body: '#E97C41', wing: '#9E4931', accent: '#FFD7A2', shape: 'round', effect: 'none', unlockScore: 0 },
+  { id: 'midnight', name: 'Midnight GT', body: '#638CC7', wing: '#314A72', accent: '#C0DDF7', shape: 'slim', effect: 'none', unlockScore: 5 },
+  { id: 'bubblegum', name: 'Bubblegum', body: '#E787B2', wing: '#A34B7F', accent: '#FFD4E7', shape: 'round', effect: 'none', unlockScore: 10 },
+  { id: 'taxi', name: 'Taxi', body: '#EDBE4F', wing: '#8B6633', accent: '#FFF1A5', shape: 'round', effect: 'none', unlockScore: 20 },
+  { id: 'roadking', name: 'Road King', body: '#D9A365', wing: '#8E5E37', accent: '#FFE5B6', shape: 'royal', effect: 'sparkle', unlockScore: 35 },
+  { id: 'mint', name: 'Mint Condition', body: '#82C6AD', wing: '#3D816F', accent: '#CDF8E5', shape: 'slim', effect: 'trail', unlockScore: 50 },
+  { id: 'blackout', name: 'Blackout', body: '#616E7A', wing: '#2E3943', accent: '#B7DBDF', shape: 'royal', effect: 'sparkle', unlockScore: 75 },
+  { id: 'neon', name: 'Neon Runner', body: '#AF8AE5', wing: '#665194', accent: '#C9F98C', shape: 'slim', effect: 'trail', unlockScore: 100 },
 ];

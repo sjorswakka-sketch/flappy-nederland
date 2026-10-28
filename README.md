@@ -1,20 +1,23 @@
-# Flappy Nederland
+# Drunken Joyride
 
-A small, fully playable browser arcade game with a Dutch twist: flap past canal-side pipes, collect a personal best, and unlock your next bird. Built with TypeScript, Vite, and Canvas 2D, with no runtime framework or external game assets.
+A midnight arcade drive through Dutch roads. Dodge random traffic and roadworks, switch lanes, collect new cars, and chase one more personal best. Built with TypeScript, Vite, and Canvas 2D.
 
-**[Play Flappy Nederland online](https://sjorswakka-sketch.github.io/flappy-nederland/)** · No installation needed.
+**[Play Drunken Joyride online](https://sjorswakka-sketch.github.io/flappy-nederland/)** · No installation needed. The existing repository and URL are retained after the redesign.
 
-## Play
+## How to play
 
-1. Choose a bird on the start screen. Oranje is ready from the beginning.
-2. Start your flight. **Tap, click, or press Space** to flap; gravity does the rest.
-3. Fly through each opening to earn one point. Touching a pipe, the ground, or the top of the play area ends the flight.
-4. Press **P** or **Escape**, or use the pause button, to pause. Leaving the browser tab also pauses the flight.
-5. At game over, enter your name and continent, save your score, check the top ten, and fly again.
+1. Choose a car in the garage. The Rust Bucket is available from the beginning.
+2. Start a run. Use **Left/Right arrows** or **A/D** to switch between three lanes.
+3. On a phone, use the left/right controls or swipe across the road. Find the open lane between traffic and roadworks.
+4. Each safely passed obstacle row adds a point. Crashing ends the run. The car has a small, predictable sway; lane changes remain under your control.
+5. Press **P** or **Escape**, or use the pause button, to pause. Leaving the tab also pauses. Use **Space** to start or restart.
+6. At game over, enter a driver name and continent, save the score, check the top ten, and try again. An optional reward demo offers one extra life per run.
 
-Bird selection, sound preference, personal best, unlocked birds, and submitted scores are saved on this browser. If browser storage is blocked or full, the game remains playable; persistence may be unavailable. Clearing site data clears this browser's progress.
+Speed, traffic frequency, and obstacle sizes increase with distance. Generated rows leave an open route, but the next safe lane can change.
 
-## Run locally and open the game
+Car choice, sound preference, best score, unlocked cars, and submitted scores stay on this browser. Storage failures do not prevent playing, but progress may then last only for the session. Clearing site data resets progress. New `drunken-joyride:*` storage keys keep driving scores separate from the previous game.
+
+## Run and open locally
 
 Install **Node.js 22.12 or newer** and npm, then open a terminal in the repository:
 
@@ -23,9 +26,9 @@ npm ci
 npm run dev
 ```
 
-Open the Local URL printed by Vite, normally **http://localhost:5173**, in a modern desktop or mobile browser. To try a phone on the same trusted Wi-Fi, run `npm run dev -- --host 0.0.0.0` and open the Network URL printed by Vite on the phone. Your computer's firewall may need to allow the development server.
+Open the Local URL printed by Vite, normally **http://localhost:5173**. For a phone on the same trusted Wi-Fi, run `npm run dev -- --host 0.0.0.0` and open the printed Network URL. The computer's firewall may need to allow the server. HTTP LAN previews work without secure-context-only run-ID APIs.
 
-Build and preview the production version:
+Build and preview production:
 
 ```sh
 npm test
@@ -33,71 +36,73 @@ npm run build
 npm run preview
 ```
 
-Open the preview URL printed in the terminal, normally **http://localhost:4173**. Serve the `dist/` folder over HTTP when deploying; opening `index.html` directly from disk does not load the TypeScript source or its modules.
+Open the preview URL, normally **http://localhost:4173**. Deploy the generated `dist/` directory over HTTP; opening the source `index.html` directly from disk does not compile TypeScript.
 
 ## Features
 
-- Frame-rate independent flight physics and responsive, high-DPI Canvas rendering.
-- Mouse, touch, and keyboard controls, pause/resume, optional synthesized audio, and a quick restart.
-- Clean orange-and-blue design with a Dutch landscape, windmills, canal houses, and tulip details.
-- Eight birds with different colors, silhouettes, and simple visual effects.
-- Smooth distance-based difficulty, with speed increasing indefinitely.
-- Personal best and score-based unlocks saved locally.
-- Worldwide and continent views, with all-time, daily, weekly, and monthly filters and a top-ten game-over preview.
-- Replaceable leaderboard and ad service boundaries.
-- Opt-in rewarded-ad demos for bird unlocks and one continuation per flight; banner/interstitial and remove-ads placeholders.
+- Top-down, three-lane endless driving with traffic cars, striped road barriers, cones, and Dutch highway details.
+- Frame-rate independent physics, responsive high-DPI rendering, touch/swipe and keyboard controls.
+- Smooth lane changes, comic car sway, optional synthesized sound, pause, crash, restart, and one rewarded continuation.
+- Eight unlockable cars with different bodies, colors, lights, and effects.
+- Indefinite distance-based difficulty progression, with tuning in one module.
+- Local best scores, car unlocks, and top tens for worldwide, continent, daily, weekly, and monthly views.
+- Prominent display-ad placement, an AdSense connection boundary, and opt-in demo rewards.
 
-## Difficulty tuning
+## Cars and difficulty tuning
 
-The difficulty formula and its constants live in [`src/game/difficulty.ts`](src/game/difficulty.ts). Progress comes from distance travelled during the current flight. Horizontal speed continues to rise smoothly without a maximum. Spawn intervals get shorter, pipe width grows, and openings get tighter, approaching configured limits that keep the geometry usable. This avoids negative spawn times, closed gaps, or unbounded pipe dimensions while the overall challenge keeps increasing.
+The garage is defined in [`src/data/skins.ts`](src/data/skins.ts). Cars unlock at scores **0, 5, 10, 20, 35, 50, 75, and 100**: Rust Bucket, Midnight GT, Bubblegum, Taxi, Road King, Mint Condition, Blackout, and Neon Runner. Locked cars can also be unlocked by completing an explicitly labelled reward demo. Cancelling a demo grants no reward.
 
-Tune the exported settings and `difficultyAt(distance)` in one place. Physics, obstacle placement, collision checks, and rendering live in [`src/game/engine.ts`](src/game/engine.ts). Fixed simulation steps reduce differences between display refresh rates. Very long runs are intentionally extremely difficult; the scaling has no final level.
+Add a car with a unique stable ID, name, body/trim/accent colors, shape, effect, and `unlockScore`. The `round`, `slim`, and `royal` values select the supplied body styles. Update both the game renderer and [`src/car.ts`](src/car.ts) when adding new shapes or effects.
 
-## Add or adjust birds
+Tune progression in [`src/game/difficulty.ts`](src/game/difficulty.ts). Speed rises smoothly without a final level; spawn timing and obstacle geometry approach configured bounds instead of becoming negative or covering the entire road. Physics, road layout, safe-row generation, collision detection, and drawing live in [`src/game/engine.ts`](src/game/engine.ts). Fixed simulation steps reduce differences between refresh rates. Extremely long runs are intentionally very difficult.
 
-Edit the `SKINS` collection in [`src/data/skins.ts`](src/data/skins.ts). Every bird has a stable ID, display name, body/wing/accent colors, a shape, an effect, and an `unlockScore`. A score of zero makes a bird available immediately. Use a unique stable ID so saved selections and unlocks continue to work. When introducing a new shape or effect beyond the supplied options, update both the Canvas renderer in the game engine and the picker preview in [`src/bird.ts`](src/bird.ts).
+## Advertisements and real revenue
 
-Locked birds can also be unlocked by completing an explicitly labelled rewarded-ad demo. Closing or cancelling that demo grants no reward.
+The prominent advertisement region reserves space outside the driving controls. **An empty or demo banner earns no advertising revenue.** No advertising account or publisher IDs have been connected yet. The default build shows a setup placeholder and sends no ad requests. Rewarded ads, interstitials, and the remove-ads purchase flow are also clearly labelled demos.
 
-## Leaderboards: local demonstration
+The display-banner adapter in [`src/services/ads.ts`](src/services/ads.ts) can request a real responsive AdSense unit after these steps:
 
-**These leaderboards are mock/local, not a live global competition.** Seeded example players are labelled as demo data, and this browser's submissions are stored locally. The worldwide/continent views demonstrate the interface; players on other browsers cannot see your score yet.
+1. Create an AdSense account and obtain account/site approval. Ads cannot show before approval. Follow [Google's site connection steps](https://support.google.com/adsense/answer/7584263).
+2. Create a responsive display unit. Copy `.env.example` to `.env.local` and fill `VITE_ADSENSE_CLIENT` and `VITE_ADSENSE_SLOT` with your own public publisher/unit IDs. Never put private credentials in `VITE_*` variables: they are embedded in public browser code.
+3. Connect production consent handling. The UI opt-in gate prevents automatic requests but is not a certified consent-management platform. Personalized ads for EEA, UK, and Swiss visitors require a [Google-certified CMP with TCF support](https://support.google.com/adsense/answer/13554116). Mount only after that platform grants the required consent.
+4. Build and deploy again with those IDs.
 
-[`src/services/leaderboard.ts`](src/services/leaderboard.ts) defines a `LeaderboardService` contract and `LocalLeaderboardService`. It supports a top ten, continent filtering, and calendar periods based on **UTC**: daily from midnight, weekly from Monday (ISO week), and monthly from the first of the month. Each run has a stable ID, so resaving or continuing a run updates that entry instead of duplicating it. A continued flight remains the same run.
+Account setup uses the operator's real payment country and details; no account is created by the game itself. The [signup URL must not contain a path](https://support.google.com/adsense/answer/2784438), so `/flappy-nederland/` is not a standalone site entry. Arrange a reachable domain homepage and the requested ownership verification before submitting the site for review. Google's [add-site flow](https://support.google.com/adsense/answer/12169212) supports a publisher meta tag for verification without requesting a banner.
 
-To connect a backend, replace the local adapter with an implementation of the same asynchronous `submit` and `list` methods. On a production service, validate names and scores, authenticate/rate-limit submissions, set timestamps server-side, enforce period rules on the server, and verify runs rather than trusting client-provided scores. Browser-local scores and unlocks can be edited by the player and are not an anti-cheat system.
+`getDisplayAdConfig()` validates both IDs. `mountDisplayAd(element, config, { consent: true, onStatus })` creates the unit and loads the SDK once. Missing configuration or consent causes no network request. Status values are `loading`, `active`, and `unavailable`. The adapter reports `active` only on `data-ad-status="filled"`; see [Google's fill-status documentation](https://support.google.com/adsense/answer/10762946). Script errors, no-fill, and a timeout leave the game usable. Revenue figures come from the publisher dashboard. Cleanup removes the unit and prevents a pending SDK load from requesting a disposed unit.
 
-## Advertising and remove ads
+For GitHub Actions builds, add public repository variables `VITE_ADSENSE_CLIENT` and `VITE_ADSENSE_SLOT` and expose them in the workflow build-step environment. Local `.env.local` files are ignored by Git and are not uploaded. An `ads.txt` file, if your account requires one, must use the exact line supplied by the provider; none is invented here.
 
-**No real ad network, payment processor, purchase, or tracking is enabled.** All placements are labelled demonstrations. The remove-ads option is a local preview switch, not a paid entitlement. It suppresses automatic ad placements; optional rewarded actions remain available.
+The separate `AdProvider` interface supports future game-ad providers such as Google's [H5 Ad Placement API](https://developers.google.com/ad-placement). For real playback, pause/mute the game and grant rewards only from verified completion, never cancellation, no-fill, or a generic close callback. Demo interstitials have a run-count threshold and time cooldown. The remove-ads option previews a local entitlement and collects no payment; production purchases need checkout and a server-verified entitlement.
 
-The suggested combination is a banner outside active play, infrequent interstitial opportunities between flights, and opt-in rewards for a continuation or a bird unlock. The demo interstitial provider includes a run-count threshold and time cooldown so ads do not interrupt every retry. Gameplay pauses for ad-related flows. Rewards are granted only after the provider reports successful completion.
+## Leaderboards are a local demonstration
 
-[`src/services/ads.ts`](src/services/ads.ts) exposes the `AdProvider` boundary. A production adapter can use a network suitable for HTML5 games, such as Google's [Ad Placement API](https://developers.google.com/ad-placement), which supports interstitial and rewarded formats. Follow the network's current eligibility, consent, child-directed-content, and placement requirements. Load a real SDK only after the required consent, pause/mute in its ad callbacks, handle no-fill/errors without blocking play, and grant rewards only from the completion callback. Production purchases need checkout, restored purchases, and a verified entitlement from a backend; never trust a local boolean for a paid remove-ads purchase.
+**Worldwide is a view, not a connected global competition.** Clearly marked sample drivers are combined with runs saved on this browser. Other browsers cannot see a score yet.
 
-## Structure
+[`src/services/leaderboard.ts`](src/services/leaderboard.ts) defines an asynchronous `LeaderboardService`. The local adapter supports top ten, continent filtering, and UTC calendar periods: daily from midnight, weekly from Monday, and monthly from the first day. Continued runs retain their ID and original timestamp, so saving again updates the entry instead of duplicating it or refreshing its period.
+
+Replace the adapter with an HTTP service to connect a backend. Validate submissions, use server timestamps, rate-limit/authenticate writes, and verify runs rather than trusting client scores. Local scores and unlocks can be edited by the player and are not an anti-cheat system.
+
+## Structure and deployment
 
 ```text
 src/
-  game/          # Physics, drawing, difficulty scaling
-  data/          # Bird definitions
-  services/      # Profile storage, leaderboard and ad adapters
-  main.ts        # Screen flow, input and service integration
-  bird.ts        # SVG bird previews for the aviary
-  style.css      # Responsive interface and optional UI fonts
-tests/           # Difficulty, period, persistence and ad invariants
+  game/          # Driving, drawing, collisions and difficulty
+  data/          # Vehicle definitions
+  services/      # Profile, leaderboard and ad adapters
+  main.ts        # Screens, input and service integration
+  car.ts         # Garage SVG vehicle previews
+  style.css      # Responsive interface
+tests/           # Gameplay and service invariants
 public/          # Static assets
+.env.example     # Empty public display-ad configuration
 .github/workflows/
   ci.yml         # Tests and production build
-  pages.yml      # Build and publish to GitHub Pages
+  pages.yml      # Build and deploy GitHub Pages
 ```
 
-## Publish with GitHub Pages
-
-The repository includes a GitHub Actions deployment workflow. In the repository, choose **Settings → Pages → Build and deployment → Source → GitHub Actions**. Push to `main`, or run **Publish game to GitHub Pages** manually in the Actions tab. The workflow runs tests and the production build, then publishes `dist/`. Open the URL shown by the deployment job or the repository's Pages settings. Relative asset paths allow the build to run under the repository's `/flappy-nederland/` path or another static host.
-
-See the official [GitHub Pages workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) for hosting configuration. The repository works locally before hosting is enabled.
+GitHub Pages uses GitHub Actions. Pushing to `main` runs tests, builds the app, and publishes `dist/`. The deployment workflow can also run manually in the Actions tab. Relative asset paths support the existing `/flappy-nederland/` URL and other static hosts. Forks must select **Settings → Pages → Source → GitHub Actions**. See the [official Pages workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
 ## License
 
-MIT. Original game art is drawn in code; no third-party images or sound files are required. The interface optionally loads DM Sans and Outfit from Google Fonts, with local system-font fallbacks when that service is unavailable. Those font requests are separate from the ad demos; no ad SDK or analytics/tracking script is loaded.
+MIT. Game artwork is drawn in code; no third-party image or sound files are required. Optional Google Fonts have local system-font fallbacks. In the default unconfigured build, no ad SDK or ad-tracking script is loaded.

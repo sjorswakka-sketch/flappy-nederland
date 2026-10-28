@@ -92,6 +92,6 @@ describe('local leaderboard adapter', () => {
   it('normalizes names as short plain text while retaining Unicode', () => {
     expect(normalizePlayerName('  <Pílót>\u0000  ')).toBe('Pílót');
     expect(Array.from(normalizePlayerName('🐤'.repeat(30)))).toHaveLength(20);
-    expect(normalizePlayerName('  ')).toBe('Flying Dutchie');
+    expect(normalizePlayerName('  ')).toBe('Night Driver');
   });
 });

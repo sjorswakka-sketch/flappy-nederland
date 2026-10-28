@@ -18,15 +18,15 @@ export interface LeaderboardService {
   list(query: LeaderboardQuery): Promise<LeaderboardEntry[]>;
 }
 
-export const LEADERBOARD_STORAGE_KEY = 'flappy-nederland:leaderboard:v1';
+export const LEADERBOARD_STORAGE_KEY = 'drunken-joyride:leaderboard:v1';
 const MAX_LOCAL_ENTRIES = 500;
 const DAY = 86_400_000;
 
 /** Names are plain text, max. 20 Unicode characters, with markup/control characters removed. */
 export function normalizePlayerName(input: unknown): string {
-  if (typeof input !== 'string') return 'Flying Dutchie';
+  if (typeof input !== 'string') return 'Night Driver';
   const value = input.normalize('NFC').replace(/[\u0000-\u001F\u007F-\u009F<>\u202A-\u202E\u2066-\u2069]/g, '').trim();
-  return Array.from(value).slice(0, 20).join('') || 'Flying Dutchie';
+  return Array.from(value).slice(0, 20).join('') || 'Night Driver';
 }
 
 /** UTC calendar periods; a week starts Monday (ISO convention), never a rolling seven days. */
@@ -55,7 +55,7 @@ function validEntry(value: unknown): value is LeaderboardEntry {
 
 /** Clearly marked sample rivals are generated relative to this service's creation date. */
 function demoEntries(now: Date): LeaderboardEntry[] {
-  const names = ['Canal Cruiser', 'Polder Pilot', 'Tulip Turbo', 'Windmill Wings', 'Delft Dreamer', 'Sky Stroop', 'Flying Finn', 'Cloud Hopper', 'Little Gouda', 'Orange Comet', 'Birdie Belle', 'Lowland Legend'];
+  const names = ['Canal Cruiser', 'Midnight Max', 'Turbo Tulip', 'Asphalt Ace', 'Delft Drifter', 'Neon Nomad', 'Taxi Trouble', 'Road Runner', 'Little Gouda', 'Orange Comet', 'Bumper Belle', 'Lowland Legend'];
   const ages = [0, 0, 0, 1, 2, 3, 6, 8, 12, 20, 33, 65];
   return CONTINENTS.flatMap((continent, region) => names.map((name, index) => ({
     id: `demo:${region}:${index}`, runId: `demo:${region}:${index}`,

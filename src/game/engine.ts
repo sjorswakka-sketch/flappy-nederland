@@ -1,37 +1,76 @@
 import { difficultyAt, type Difficulty } from './difficulty';
-import type { BirdSkin } from '../data/skins';
+import type { VehicleSkin } from '../data/skins';
 
-export const WORLD = { width: 480, height: 640, ground: 584, birdX: 132, birdRadius: 14 } as const;
-export const PHYSICS = { gravity: 1080, flapVelocity: -342, maxFallSpeed: 520, step: 1 / 120 } as const;
+export const WORLD = { width: 480, height: 640, roadLeft: 72, roadRight: 408, laneWidth: 112, playerY: 510, carWidth: 44, carHeight: 76 } as const;
+export const PHYSICS = { step: 1 / 120, steeringResponse: 16, sway: 3.5, reviveGrace: 2 } as const;
 export type GameStatus = 'ready' | 'playing' | 'paused' | 'over';
-export interface Pipe { x: number; width: number; center: number; gap: number; passed: boolean }
+export interface Hazard { lane: number; kind: 'traffic' | 'barrier'; y: number; width: number; height: number; color: string }
+export interface HazardRow { hazards: Hazard[]; passed: boolean; safeLane: number }
 interface Particle { x: number; y: number; life: number; color: string }
-export interface GameSnapshot { status: GameStatus; score: number; distance: number; difficulty: Difficulty }
+export interface GameSnapshot { status: GameStatus; score: number; distance: number; lane: number; difficulty: Difficulty }
 export interface EngineOptions {
   onScore: (score: number) => void;
   onGameOver: (score: number) => void;
   onStateChange?: (status: GameStatus) => void;
-  skin: BirdSkin;
+  skin: VehicleSkin;
   sound?: boolean;
 }
 
-/** Circle/rectangle intersection avoids unfair collisions at the bird's corners. */
-export function circleHitsRect(x: number, y: number, radius: number, left: number, top: number, width: number, height: number): boolean {
-  const nearestX = Math.max(left, Math.min(x, left + width));
-  const nearestY = Math.max(top, Math.min(y, top + height));
-  return (x - nearestX) ** 2 + (y - nearestY) ** 2 < radius ** 2;
+export function laneCenter(lane: number): number { return WORLD.roadLeft + WORLD.laneWidth * (lane + 0.5); }
+export function rectsOverlap(ax: number, ay: number, aw: number, ah: number, bx: number, by: number, bw: number, bh: number): boolean {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-/** Physics uses a fixed timestep, independent of monitor refresh rate. UI owns inputs. */
+/** Relative-motion slab test catches a fast car crossing an obstacle between frames. */
+export function sweptCarHitsHazard(fromX: number, toX: number, hazard: Hazard, oldY: number): boolean {
+  const x = fromX - laneCenter(hazard.lane);
+  const y = WORLD.playerY - oldY;
+  const dx = toX - fromX;
+  const dy = -(hazard.y - oldY);
+  // Slightly inset hitboxes make bumper and mirror edges feel forgiving.
+  const halfW = (WORLD.carWidth - 8 + hazard.width - 6) / 2;
+  const halfH = (WORLD.carHeight - 12 + hazard.height - 10) / 2;
+  let enter = 0; let leave = 1;
+  for (const [position, motion, half] of [[x, dx, halfW], [y, dy, halfH]]) {
+    if (Math.abs(motion) < 1e-9) { if (Math.abs(position) >= half) return false; continue; }
+    const first = (-half - position) / motion;
+    const last = (half - position) / motion;
+    enter = Math.max(enter, Math.min(first, last));
+    leave = Math.min(leave, Math.max(first, last));
+    if (enter >= leave) return false;
+  }
+  return leave > 0 && enter < 1;
+}
+
+/** Every row leaves a whole lane open; randomness never seals the road. */
+export function makeHazardRow(difficulty: Difficulty, random: () => number = Math.random): HazardRow {
+  const safeLane = Math.min(2, Math.floor(random() * 3));
+  const blocked = [0, 1, 2].filter(lane => lane !== safeLane);
+  if (random() < 0.56) blocked.splice(Math.floor(random() * 2), 1);
+  const colors = ['#7c9d9f', '#e9d7ab', '#ca7257', '#8c8eab', '#a1b28e'];
+  const hazards = blocked.map(lane => {
+    const kind = random() < 0.36 ? 'barrier' : 'traffic';
+    return {
+      lane, kind, y: -WORLD.carHeight - random() * 20,
+      width: kind === 'barrier' ? difficulty.hazardWidth + 18 : difficulty.hazardWidth,
+      height: kind === 'barrier' ? difficulty.hazardHeight * 0.63 : difficulty.hazardHeight,
+      color: colors[Math.min(colors.length - 1, Math.floor(random() * colors.length))],
+    } satisfies Hazard;
+  });
+  return { safeLane, hazards, passed: false };
+}
+
+/** Fixed simulation steps decouple handling and collisions from screen refresh rates. */
 export class GameEngine {
-  private ctx: CanvasRenderingContext2D;
-  private options: EngineOptions;
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly resizeObserver: ResizeObserver;
   private status: GameStatus = 'ready';
   private score = 0;
   private distance = 0;
-  private y = 278;
-  private velocity = 0;
-  private pipes: Pipe[] = [];
+  private lane = 1;
+  private x = laneCenter(1);
+  private renderedX = laneCenter(1);
+  private rows: HazardRow[] = [];
   private particles: Particle[] = [];
   private spawnClock = 0;
   private elapsed = 0;
@@ -41,323 +80,179 @@ export class GameEngine {
   private accumulator = 0;
   private frame = 0;
   private disposed = false;
-  private resizeObserver: ResizeObserver;
   private audio?: AudioContext;
 
-  constructor(private canvas: HTMLCanvasElement, options: EngineOptions) {
-    const ctx = canvas.getContext('2d', { alpha: false });
-    if (!ctx) throw new Error('This browser does not support Canvas 2D.');
-    this.ctx = ctx;
-    this.options = options;
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly options: EngineOptions) {
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('This browser does not support Canvas 2D.');
+    this.ctx = context;
     this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(canvas);
-    this.resize();
+    this.resizeObserver.observe(canvas); this.resize();
     this.frame = requestAnimationFrame(this.tick);
   }
-
   private resize(): void {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2.5);
-    const width = Math.max(1, this.canvas.clientWidth);
-    this.canvas.width = Math.round(width * ratio);
-    this.canvas.height = Math.round(width * ratio * WORLD.height / WORLD.width);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    this.canvas.width = Math.round(Math.max(1, this.canvas.clientWidth) * dpr);
+    this.canvas.height = Math.round(this.canvas.width * WORLD.height / WORLD.width);
     this.ctx.setTransform(this.canvas.width / WORLD.width, 0, 0, this.canvas.height / WORLD.height, 0, 0);
   }
-
   private changeStatus(status: GameStatus): void {
-    this.status = status;
-    this.accumulator = 0;
-    this.lastTime = 0;
+    this.status = status; this.accumulator = 0; this.lastTime = 0;
     this.options.onStateChange?.(status);
   }
-
   start(): void {
-    this.score = 0;
-    this.distance = 0;
-    this.y = 278;
-    this.velocity = PHYSICS.flapVelocity;
-    this.pipes = [];
-    this.particles = [];
-    this.spawnClock = 0.6; // A clear runway before the first obstacle.
-    this.invulnerable = 0;
-    this.options.onScore(0);
-    this.changeStatus('playing');
-    this.tone(580, 0.055, 0.04);
+    this.score = 0; this.distance = 0; this.lane = 1;
+    this.x = this.renderedX = laneCenter(1); this.rows = []; this.particles = [];
+    this.spawnClock = 0; this.invulnerable = 0;
+    this.options.onScore(0); this.changeStatus('playing'); this.tone(160, 0.18, 0.035);
   }
-
-  flap(): void {
-    if (this.status === 'ready') { this.start(); return; }
+  steer(direction: -1 | 1): void {
     if (this.status !== 'playing') return;
-    this.velocity = PHYSICS.flapVelocity;
-    this.tone(520, 0.045, 0.025);
+    this.lane = Math.max(0, Math.min(2, this.lane + direction)); this.tone(105, 0.04, 0.012);
   }
-
   pause(): void { if (this.status === 'playing') this.changeStatus('paused'); }
   resume(): void { if (this.status === 'paused') this.changeStatus('playing'); }
-
-  /** One-per-run reward policy is enforced by the app, not this rendering layer. */
+  /** UI enforces one continue per run. Score and distance remain part of that run. */
   revive(): void {
     if (this.status !== 'over') return;
-    this.y = 278;
-    this.velocity = PHYSICS.flapVelocity;
-    this.pipes = this.pipes.filter(pipe => pipe.x > WORLD.birdX + 260);
-    this.spawnClock = 0;
-    this.invulnerable = 2;
+    this.rows = []; this.spawnClock = 0; this.lane = 1;
+    this.x = this.renderedX = laneCenter(1); this.invulnerable = PHYSICS.reviveGrace;
     this.changeStatus('paused');
   }
-
-  setSkin(skin: BirdSkin): void { this.options.skin = skin; }
+  setSkin(skin: VehicleSkin): void { this.options.skin = skin; }
   setSound(sound: boolean): void { this.options.sound = sound; }
-  getSnapshot(): GameSnapshot { return { status: this.status, score: this.score, distance: this.distance, difficulty: difficultyAt(this.distance) }; }
-
-  destroy(): void {
-    this.disposed = true;
-    cancelAnimationFrame(this.frame);
-    this.resizeObserver.disconnect();
-    void this.audio?.close();
-  }
-
+  getSnapshot(): GameSnapshot { return { status: this.status, score: this.score, distance: this.distance, lane: this.lane, difficulty: difficultyAt(this.distance) }; }
+  destroy(): void { this.disposed = true; cancelAnimationFrame(this.frame); this.resizeObserver.disconnect(); void this.audio?.close(); }
   private tone(frequency: number, duration: number, volume: number): void {
     if (!this.options.sound) return;
     try {
-      this.audio ??= new AudioContext();
-      if (this.audio.state === 'suspended') void this.audio.resume();
-      const oscillator = this.audio.createOscillator();
-      const gain = this.audio.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(frequency, this.audio.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.65, this.audio.currentTime + duration);
-      gain.gain.setValueAtTime(volume, this.audio.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.audio.currentTime + duration);
-      oscillator.connect(gain); gain.connect(this.audio.destination);
-      oscillator.start(); oscillator.stop(this.audio.currentTime + duration);
-    } catch { /* Audio support must never prevent play. */ }
+      this.audio ??= new AudioContext(); if (this.audio.state === 'suspended') void this.audio.resume();
+      const oscillator = this.audio.createOscillator(); const gain = this.audio.createGain();
+      oscillator.type = 'triangle'; oscillator.frequency.setValueAtTime(frequency, this.audio.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.62, this.audio.currentTime + duration);
+      gain.gain.setValueAtTime(volume, this.audio.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, this.audio.currentTime + duration);
+      oscillator.connect(gain); gain.connect(this.audio.destination); oscillator.start(); oscillator.stop(this.audio.currentTime + duration);
+    } catch { /* Blocked optional audio must never stop a drive. */ }
   }
-
   private tick = (time: number): void => {
     if (this.disposed) return;
     const delta = this.lastTime ? Math.min((time - this.lastTime) / 1000, 0.08) : 0;
     this.lastTime = time;
-    this.elapsed += delta;
     if (this.status === 'playing') {
       this.accumulator += delta;
-      while (this.accumulator >= PHYSICS.step && this.status === 'playing') {
-        this.accumulator -= PHYSICS.step;
-        this.update(PHYSICS.step);
-      }
-    } else if (this.status === 'ready') {
-      this.sceneryDistance += delta * 22;
-    }
-    this.draw();
-    this.frame = requestAnimationFrame(this.tick);
+      while (this.accumulator >= PHYSICS.step && this.status === 'playing') { this.accumulator -= PHYSICS.step; this.update(PHYSICS.step); }
+    } else if (this.status === 'ready') { this.sceneryDistance += delta * 35; this.elapsed += delta; }
+    this.draw(); this.frame = requestAnimationFrame(this.tick);
   };
-
   private update(dt: number): void {
     const difficulty = difficultyAt(this.distance);
-    this.distance += difficulty.speed * dt;
-    this.sceneryDistance += difficulty.speed * dt;
+    this.elapsed += dt; this.distance += difficulty.speed * dt; this.sceneryDistance += difficulty.speed * dt;
     this.invulnerable = Math.max(0, this.invulnerable - dt);
-    this.velocity = Math.min(PHYSICS.maxFallSpeed, this.velocity + PHYSICS.gravity * dt);
-    this.y += this.velocity * dt;
+    const previousX = this.renderedX;
+    this.x += (laneCenter(this.lane) - this.x) * (1 - Math.exp(-PHYSICS.steeringResponse * dt));
+    this.renderedX = this.x + Math.sin(this.elapsed * 3.4) * PHYSICS.sway + Math.sin(this.elapsed * 1.8) * 1.5;
     this.spawnClock += dt;
-    if (this.spawnClock >= difficulty.spawnInterval) {
-      this.spawnClock -= difficulty.spawnInterval;
-      this.spawnPipe(difficulty);
-    }
-    for (const pipe of this.pipes) {
-      pipe.x -= difficulty.speed * dt;
-      if (!pipe.passed && pipe.x + pipe.width + 8 < WORLD.birdX - WORLD.birdRadius) {
-        pipe.passed = true;
-        this.score++;
-        this.options.onScore(this.score);
-        this.tone(870, 0.1, 0.05);
-        for (let i = 0; i < 7; i++) this.particles.push({ x: WORLD.birdX + Math.random() * 15, y: this.y + (Math.random() - 0.5) * 35, life: 0.65 + Math.random() * 0.3, color: '#ffc45b' });
+    if (this.spawnClock >= difficulty.spawnInterval) { this.spawnClock -= difficulty.spawnInterval; this.rows.push(makeHazardRow(difficulty)); }
+    for (const row of this.rows) {
+      for (const hazard of row.hazards) {
+        const oldY = hazard.y; hazard.y += difficulty.speed * dt;
+        if (!this.invulnerable && sweptCarHitsHazard(previousX, this.renderedX, hazard, oldY)) { this.end(); return; }
       }
-      const lip = 7;
-      const top = pipe.center - pipe.gap / 2;
-      const bottom = pipe.center + pipe.gap / 2;
-      // The wider cap has its own hitbox; invisible side padding must not kill a run.
-      const hit = circleHitsRect(WORLD.birdX, this.y, WORLD.birdRadius, pipe.x, -20, pipe.width, top + 20)
-        || circleHitsRect(WORLD.birdX, this.y, WORLD.birdRadius, pipe.x - lip, top - 21, pipe.width + lip * 2, 21)
-        || circleHitsRect(WORLD.birdX, this.y, WORLD.birdRadius, pipe.x, bottom, pipe.width, WORLD.ground - bottom)
-        || circleHitsRect(WORLD.birdX, this.y, WORLD.birdRadius, pipe.x - lip, bottom, pipe.width + lip * 2, 21);
-      if (!this.invulnerable && hit) {
-        this.end(); return;
+      if (!row.passed && row.hazards.every(hazard => hazard.y - hazard.height / 2 > WORLD.playerY + WORLD.carHeight / 2)) {
+        row.passed = true; this.score++; this.options.onScore(this.score); this.tone(610, 0.07, 0.025);
       }
     }
-    this.pipes = this.pipes.filter(pipe => pipe.x + pipe.width > -20);
-    for (const particle of this.particles) { particle.x -= difficulty.speed * dt * 0.5; particle.life -= dt; particle.y += 25 * dt; }
+    this.rows = this.rows.filter(row => row.hazards.some(hazard => hazard.y - hazard.height / 2 < WORLD.height + 25));
+    if (this.options.skin.effect !== 'none' && Math.random() < dt * 20) this.particles.push({ x: this.renderedX + (Math.random() - 0.5) * 30, y: WORLD.playerY + 33, life: 0.45, color: this.options.skin.accent });
+    this.particles.forEach(particle => { particle.y += difficulty.speed * dt * 0.6; particle.life -= dt; });
     this.particles = this.particles.filter(particle => particle.life > 0);
-    // Boundaries still apply during a revive grace period, so the player cannot hide.
-    if (this.y - WORLD.birdRadius <= 0 || this.y + WORLD.birdRadius >= WORLD.ground) this.end();
   }
-
-  private spawnPipe(difficulty: Difficulty): void {
-    const previous = this.pipes[this.pipes.length - 1];
-    const baseCenter = previous?.center ?? 290;
-    const edgeToEdgeTime = Math.max(0.2, difficulty.spawnInterval - difficulty.pipeWidth / difficulty.speed);
-    // Limit vertical variation to the time available between obstacles.
-    const variation = Math.min(102, edgeToEdgeTime * 95);
-    const minCenter = 85 + difficulty.gap / 2;
-    const maxCenter = WORLD.ground - 70 - difficulty.gap / 2;
-    const center = Math.max(minCenter, Math.min(maxCenter, baseCenter + (Math.random() - 0.5) * variation * 2));
-    this.pipes.push({ x: WORLD.width + 20, width: difficulty.pipeWidth, center, gap: difficulty.gap, passed: false });
-  }
-
-  private end(): void {
-    this.tone(150, 0.18, 0.07);
-    this.changeStatus('over');
-    this.options.onGameOver(this.score);
-  }
+  private end(): void { this.tone(65, 0.25, 0.065); this.changeStatus('over'); this.options.onGameOver(this.score); }
 
   private draw(): void {
-    const ctx = this.ctx;
-    this.drawLandscape(ctx);
-    this.pipes.forEach(pipe => this.drawPipe(ctx, pipe));
-    for (const particle of this.particles) {
-      ctx.globalAlpha = Math.min(1, particle.life * 2);
-      ctx.fillStyle = particle.color;
-      ctx.beginPath(); ctx.arc(particle.x, particle.y, 3 * particle.life, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    const birdY = this.status === 'ready' ? 278 + Math.sin(this.elapsed * 3) * 9 : this.y;
-    if (!this.invulnerable || Math.floor(this.elapsed * 12) % 2 === 0) this.drawBird(ctx, WORLD.birdX, birdY);
-    this.drawGround(ctx);
-  }
-
-  private drawLandscape(ctx: CanvasRenderingContext2D): void {
-    const drift = this.sceneryDistance;
-    ctx.fillStyle = '#d9edf2'; ctx.fillRect(0, 0, 480, 640);
-    ctx.fillStyle = '#f7efcf'; ctx.beginPath(); ctx.arc(376, 114, 38, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#edf6f4';
-    for (let i = 0; i < 6; i++) {
-      const x = ((i * 146 + 44 - drift * 0.07) % 800 + 800) % 800 - 110;
-      const y = 66 + (i % 3) * 59;
-      this.cloud(ctx, x, y, 0.8 + (i % 2) * 0.3);
-    }
-    // Far polders and slow windmills give depth without cluttering the play area.
-    ctx.fillStyle = '#c6dcd2';
-    ctx.beginPath(); ctx.moveTo(0, 445);
-    for (let x = 0; x <= 500; x += 10) ctx.lineTo(x, 438 + Math.sin((x + drift * 0.1) / 99) * 16);
-    ctx.lineTo(480, 584); ctx.lineTo(0, 584); ctx.fill();
-    for (let i = 0; i < 3; i++) {
-      const x = ((i * 280 + 195 - drift * 0.13) % 850 + 850) % 850 - 100;
-      this.windmill(ctx, x, 465, 0.68 + (i % 2) * 0.2);
-    }
-    ctx.fillStyle = '#b1cfc0';
-    ctx.beginPath(); ctx.moveTo(0, 495);
-    for (let x = 0; x <= 500; x += 10) ctx.lineTo(x, 490 + Math.sin((x + drift * 0.2) / 70) * 11);
-    ctx.lineTo(480, 584); ctx.lineTo(0, 584); ctx.fill();
-    for (let i = 0; i < 7; i++) {
-      const x = ((i * 75 + 20 - drift * 0.25) % 630 + 630) % 630 - 75;
-      this.house(ctx, x, 531, i);
-    }
-    ctx.fillStyle = '#97bdc2'; ctx.fillRect(0, 539, 480, 45);
-    ctx.strokeStyle = '#c0d8d6'; ctx.lineWidth = 2;
-    for (let i = 0; i < 10; i++) {
-      const x = ((i * 76 - drift * 0.35) % 650 + 650) % 650 - 100;
-      ctx.beginPath(); ctx.moveTo(x, 550 + (i % 3) * 10); ctx.lineTo(x + 29, 550 + (i % 3) * 10); ctx.stroke();
-    }
-  }
-
-  private cloud(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
-    ctx.save(); ctx.translate(x, y); ctx.scale(scale, scale);
-    ctx.beginPath(); ctx.ellipse(0, 7, 38, 12, 0, 0, Math.PI * 2); ctx.ellipse(-12, 0, 19, 16, 0, 0, Math.PI * 2); ctx.ellipse(11, -5, 21, 21, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-  }
-
-  private windmill(ctx: CanvasRenderingContext2D, x: number, y: number, scale: number): void {
-    ctx.save(); ctx.translate(x, y); ctx.scale(scale, scale);
-    ctx.fillStyle = '#8fab9e'; ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(-11, -65); ctx.lineTo(11, -65); ctx.lineTo(20, 0); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#748f86'; ctx.beginPath(); ctx.moveTo(-15, -65); ctx.lineTo(0, -82); ctx.lineTo(15, -65); ctx.closePath(); ctx.fill();
-    ctx.translate(0, -65); ctx.rotate(this.elapsed * 0.32);
-    for (let i = 0; i < 4; i++) {
-      ctx.rotate(Math.PI / 2); ctx.strokeStyle = '#77968b'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -52); ctx.stroke();
-      ctx.fillStyle = '#a1bdb0'; ctx.fillRect(2, -51, 9, 37);
-      ctx.strokeStyle = '#77968b'; ctx.lineWidth = 1;
-      for (let j = 0; j < 5; j++) { ctx.beginPath(); ctx.moveTo(2, -49 + j * 8); ctx.lineTo(11, -49 + j * 8); ctx.stroke(); }
-    }
-    ctx.fillStyle = '#6f8a80'; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-  }
-
-  private house(ctx: CanvasRenderingContext2D, x: number, baseline: number, index: number): void {
-    const h = 42 + (index % 3) * 13;
-    const colors = ['#d0b6a1', '#9caeaa', '#b4a69b', '#c6b7a5'];
-    ctx.fillStyle = colors[index % colors.length];
-    ctx.fillRect(x, baseline - h, 35, h);
-    ctx.beginPath(); ctx.moveTo(x - 3, baseline - h); ctx.lineTo(x + 17.5, baseline - h - 19); ctx.lineTo(x + 38, baseline - h); ctx.fill();
-    ctx.fillStyle = '#e4e2ce';
-    for (let row = 0; row < Math.floor(h / 18); row++) for (let col = 0; col < 2; col++) ctx.fillRect(x + 7 + col * 14, baseline - h + 9 + row * 17, 6, 8);
-    ctx.fillStyle = '#80958c'; ctx.fillRect(x + 14, baseline - 15, 8, 15);
-    ctx.fillStyle = '#8fa99c'; ctx.fillRect(x - 1, baseline, 39, 5);
-  }
-
-  private drawGround(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = '#789778'; ctx.fillRect(0, WORLD.ground, 480, 8);
-    ctx.fillStyle = '#ece2c5'; ctx.fillRect(0, WORLD.ground + 8, 480, 48);
-    ctx.strokeStyle = '#d5c9a9'; ctx.lineWidth = 1;
-    const offset = this.sceneryDistance % 32;
-    for (let x = -32; x < 512; x += 32) { ctx.beginPath(); ctx.moveTo(x - offset, 604); ctx.lineTo(x + 22 - offset, 604); ctx.stroke(); }
-    for (let i = 0; i < 14; i++) {
-      const x = ((i * 45 - this.sceneryDistance * 0.8) % 630 + 630) % 630 - 45;
-      ctx.strokeStyle = '#5f855b'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(x, 585); ctx.lineTo(x, 574); ctx.stroke();
-      ctx.fillStyle = i % 3 === 0 ? '#d97852' : '#e19c61';
-      ctx.beginPath(); ctx.moveTo(x - 5, 570); ctx.lineTo(x - 3, 566); ctx.lineTo(x, 570); ctx.lineTo(x + 3, 566); ctx.lineTo(x + 5, 570); ctx.quadraticCurveTo(x + 5, 578, x, 578); ctx.quadraticCurveTo(x - 5, 577, x - 5, 570); ctx.fill();
-    }
-  }
-
-  private drawPipe(ctx: CanvasRenderingContext2D, pipe: Pipe): void {
-    const top = pipe.center - pipe.gap / 2;
-    const bottom = pipe.center + pipe.gap / 2;
-    ctx.fillStyle = '#70938d'; ctx.strokeStyle = '#4c736e'; ctx.lineWidth = 2;
-    ctx.fillRect(pipe.x, -5, pipe.width, top + 5); ctx.strokeRect(pipe.x, -5, pipe.width, top + 5);
-    ctx.fillRect(pipe.x, bottom, pipe.width, WORLD.ground - bottom); ctx.strokeRect(pipe.x, bottom, pipe.width, WORLD.ground - bottom);
-    ctx.fillStyle = '#88a9a1'; ctx.fillRect(pipe.x + 5, 0, 9, top - 9); ctx.fillRect(pipe.x + 5, bottom + 10, 9, WORLD.ground - bottom - 10);
-    ctx.fillStyle = '#537d77'; ctx.fillRect(pipe.x + pipe.width - 9, 0, 7, top - 9); ctx.fillRect(pipe.x + pipe.width - 9, bottom + 10, 7, WORLD.ground - bottom - 10);
-    ctx.fillStyle = '#e4cf94'; ctx.strokeStyle = '#9f956b';
-    ctx.beginPath(); ctx.roundRect(pipe.x - 7, top - 21, pipe.width + 14, 21, 4); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.roundRect(pipe.x - 7, bottom, pipe.width + 14, 21, 4); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#f2dfab'; ctx.fillRect(pipe.x - 3, top - 18, pipe.width + 6, 5); ctx.fillRect(pipe.x - 3, bottom + 3, pipe.width + 6, 5);
-    // A small tricolour plaque is the only decoration on each obstacle.
-    const plaqueY = bottom + 43;
-    if (plaqueY + 12 < WORLD.ground) {
-      ctx.fillStyle = '#c37366'; ctx.fillRect(pipe.x + pipe.width / 2 - 8, plaqueY, 16, 4);
-      ctx.fillStyle = '#f4eedb'; ctx.fillRect(pipe.x + pipe.width / 2 - 8, plaqueY + 4, 16, 4);
-      ctx.fillStyle = '#6c86a2'; ctx.fillRect(pipe.x + pipe.width / 2 - 8, plaqueY + 8, 16, 4);
-    }
-  }
-
-  private drawBird(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    const ctx = this.ctx; this.drawRoad(ctx);
+    this.rows.forEach(row => row.hazards.forEach(hazard => {
+      const x = laneCenter(hazard.lane);
+      if (hazard.kind === 'barrier') this.drawBarrier(ctx, x, hazard.y, hazard.width, hazard.height);
+      else this.drawCar(ctx, x, hazard.y, hazard.width, hazard.height, hazard.color, '#384c56', '#dfe6d7', false, 0);
+    }));
+    this.particles.forEach(particle => { ctx.globalAlpha = particle.life; ctx.fillStyle = particle.color; ctx.beginPath(); ctx.arc(particle.x, particle.y, 5 * particle.life, 0, Math.PI * 2); ctx.fill(); }); ctx.globalAlpha = 1;
     const skin = this.options.skin;
-    ctx.save(); ctx.translate(x, y);
-    ctx.rotate(this.status === 'playing' ? Math.max(-0.38, Math.min(1.1, this.velocity / 570)) : -0.08);
-    if (skin.effect === 'trail') {
-      ctx.globalAlpha = 0.3; ctx.fillStyle = skin.accent;
-      ctx.beginPath(); ctx.ellipse(-25, 4, 16, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    const x = this.status === 'ready' ? laneCenter(1) + Math.sin(this.elapsed * 2) * 3 : this.renderedX;
+    if (!this.invulnerable || Math.floor(this.elapsed * 10) % 2 === 0) {
+      const turn = Math.max(-0.17, Math.min(0.17, (laneCenter(this.lane) - this.x) / 390));
+      const width = WORLD.carWidth + (skin.shape === 'royal' ? 5 : skin.shape === 'slim' ? -3 : 0);
+      this.drawCar(ctx, x, WORLD.playerY, width, WORLD.carHeight + (skin.shape === 'royal' ? 5 : 0), skin.body, skin.wing, skin.accent, true, turn + Math.sin(this.elapsed * 3.4) * 0.025);
     }
-    ctx.fillStyle = skin.wing; ctx.beginPath(); ctx.moveTo(-15, 0); ctx.lineTo(-30, -8); ctx.lineTo(-26, 7); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = skin.body; ctx.strokeStyle = '#314d50'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.ellipse(0, 0, skin.shape === 'slim' ? 23 : 22, skin.shape === 'slim' ? 16 : 19, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = skin.accent; ctx.beginPath(); ctx.ellipse(7, 8, 13, 9, -0.2, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = skin.wing;
-    const flap = Math.sin(this.elapsed * (this.status === 'playing' ? 23 : 6)) * 0.4;
-    ctx.save(); ctx.translate(-7, 3); ctx.rotate(flap);
-    ctx.beginPath(); ctx.ellipse(-3, 1, 12, 7, -0.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
-    ctx.fillStyle = '#fff9e9'; ctx.beginPath(); ctx.ellipse(12, -6, 7, 8, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#263e45'; ctx.beginPath(); ctx.arc(15, -6, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#edb550'; ctx.beginPath(); ctx.moveTo(20, -1); ctx.lineTo(31, 3); ctx.lineTo(20, 8); ctx.closePath(); ctx.fill(); ctx.stroke();
-    if (skin.shape === 'royal') {
-      ctx.fillStyle = '#eabe4d'; ctx.strokeStyle = '#a7802a'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(-10, -17); ctx.lineTo(-13, -30); ctx.lineTo(-5, -25); ctx.lineTo(0, -33); ctx.lineTo(5, -25); ctx.lineTo(12, -30); ctx.lineTo(9, -17); ctx.closePath(); ctx.fill(); ctx.stroke();
-    }
-    if (skin.effect === 'sparkle') {
-      ctx.strokeStyle = skin.accent; ctx.lineWidth = 2;
-      for (let i = 0; i < 3; i++) {
-        const sx = Math.cos(this.elapsed * 2 + i * 2.1) * 33;
-        const sy = Math.sin(this.elapsed * 2 + i * 2.1) * 28;
-        ctx.beginPath(); ctx.moveTo(sx - 3, sy); ctx.lineTo(sx + 3, sy); ctx.moveTo(sx, sy - 3); ctx.lineTo(sx, sy + 3); ctx.stroke();
+    if (this.status === 'over') { ctx.fillStyle = '#ef8b5645'; ctx.beginPath(); ctx.arc(x, WORLD.playerY, 62, 0, Math.PI * 2); ctx.fill(); }
+  }
+  private drawRoad(ctx: CanvasRenderingContext2D): void {
+    ctx.fillStyle = '#122c2e'; ctx.fillRect(0, 0, WORLD.width, WORLD.height);
+    const drift = this.sceneryDistance;
+    // Roadside Dutch buildings stay outside the playable road.
+    for (let side = 0; side < 2; side++) {
+      const edge = side ? 431 : 9;
+      for (let i = 0; i < 6; i++) {
+        const y = ((i * 154 + drift * 0.4) % 924) - 150;
+        ctx.fillStyle = i % 2 ? '#1e3b3d' : '#1a3639'; ctx.fillRect(edge, y, 39, 70);
+        ctx.fillStyle = '#7e9d7948';
+        for (let r = 0; r < 3; r++) for (let c = 0; c < 2; c++) ctx.fillRect(edge + 8 + c * 15, y + 12 + r * 17, 5, 7);
+        ctx.fillStyle = '#243b38'; ctx.fillRect(side ? 414 : 63, y + 95, 3, 33);
+        ctx.fillStyle = '#b0a675'; ctx.fillRect(side ? 413 : 61, y + 94, 6, 5);
       }
     }
+    ctx.fillStyle = '#28333c'; ctx.fillRect(WORLD.roadLeft, 0, WORLD.roadRight - WORLD.roadLeft, WORLD.height);
+    ctx.fillStyle = '#202b34'; ctx.fillRect(78, 0, 16, 640); ctx.fillRect(386, 0, 16, 640);
+    ctx.fillStyle = '#c4be9a'; ctx.fillRect(83, 0, 3, 640); ctx.fillRect(394, 0, 3, 640);
+    ctx.fillStyle = '#9d9c8270';
+    for (let i = -1; i < 10; i++) { const y = i * 83 + drift % 83; ctx.fillRect(183, y, 3, 39); ctx.fillRect(295, y, 3, 39); }
+    for (let i = -1; i < 11; i++) {
+      const y = i * 71 + drift % 71;
+      ctx.fillStyle = '#ce8657'; ctx.fillRect(75, y, 4, 9); ctx.fillRect(401, y, 4, 9);
+      ctx.fillStyle = '#ffffff05'; ctx.fillRect(94, y + 28, 288, 1);
+    }
+    const signY = ((drift * 0.3 + 140) % 1000) - 100;
+    ctx.fillStyle = '#4f7370'; ctx.fillRect(27, signY + 30, 3, 60);
+    this.roundRect(ctx, 7, signY, 57, 37, 3, '#28618a');
+    ctx.fillStyle = '#eff6e8'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText('A2 ↗', 35, signY + 15);
+    ctx.font = '7px system-ui'; ctx.fillText('UTRECHT', 35, signY + 28);
+    const millY = ((drift * 0.25 + 370) % 960) - 120;
+    ctx.strokeStyle = '#50716a'; ctx.lineWidth = 3; ctx.beginPath();
+    ctx.moveTo(439, millY + 55); ctx.lineTo(447, millY + 13); ctx.lineTo(455, millY + 55); ctx.closePath(); ctx.stroke();
+    ctx.save(); ctx.translate(447, millY + 18); ctx.rotate(this.elapsed * 0.5);
+    for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.fillStyle = '#53726b'; ctx.fillRect(0, -2, 24, 4); } ctx.restore();
+  }
+  private roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number, fill: string): void {
+    ctx.fillStyle = fill; ctx.beginPath(); ctx.roundRect(x, y, width, height, radius); ctx.fill();
+  }
+  private drawCar(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, body: string, roof: string, accent: string, player: boolean, angle: number): void {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+    const left = -width / 2; const top = -height / 2;
+    this.roundRect(ctx, left + 4, top + 5, width, height, 10, '#00000037');
+    if (player) {
+      ctx.fillStyle = '#e7e6aa0c'; ctx.beginPath(); ctx.moveTo(left + 3, top); ctx.lineTo(left - 16, top - 104); ctx.lineTo(width / 2 + 16, top - 104); ctx.lineTo(width / 2 - 3, top); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ed9f5830'; ctx.fillRect(left - 4, top + 9, width + 8, height - 12);
+    }
+    this.roundRect(ctx, left - 3, top + 10, 7, 17, 2, '#101b22'); this.roundRect(ctx, width / 2 - 4, top + 10, 7, 17, 2, '#101b22');
+    this.roundRect(ctx, left - 3, height / 2 - 25, 7, 17, 2, '#101b22'); this.roundRect(ctx, width / 2 - 4, height / 2 - 25, 7, 17, 2, '#101b22');
+    this.roundRect(ctx, left, top, width, height, 10, body);
+    this.roundRect(ctx, left + 6, top + height * 0.29, width - 12, height * 0.43, 5, roof);
+    this.roundRect(ctx, left + 8, top + height * 0.29, width - 16, height * 0.16, 3, '#263f4b');
+    this.roundRect(ctx, left + 8, top + height * 0.61, width - 16, height * 0.11, 2, '#233b43');
+    ctx.fillStyle = accent; ctx.globalAlpha = 0.6; ctx.fillRect(-2, top + 6, 4, height * 0.18); ctx.fillRect(-2, height / 2 - 14, 4, 9); ctx.globalAlpha = 1;
+    this.roundRect(ctx, left + 5, top + 3, 9, 4, 2, '#fff0b7'); this.roundRect(ctx, width / 2 - 14, top + 3, 9, 4, 2, '#fff0b7');
+    this.roundRect(ctx, left + 5, height / 2 - 6, 9, 3, 1, '#b64f43'); this.roundRect(ctx, width / 2 - 14, height / 2 - 6, 9, 3, 1, '#b64f43');
+    ctx.fillStyle = '#f1cb63'; ctx.fillRect(-7, height / 2 - 6, 14, 3);
+    if (player && this.options.skin.shape === 'royal') { ctx.fillStyle = '#e4cc83'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.fillText('★', 0, 5); }
+    ctx.restore();
+  }
+  private drawBarrier(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+    ctx.save(); ctx.translate(x, y);
+    this.roundRect(ctx, -width / 2 + 3, -height / 2 + 5, width, height, 5, '#00000035');
+    this.roundRect(ctx, -width / 2, -height / 2, width, height, 5, '#ea8e4a');
+    ctx.save(); ctx.beginPath(); ctx.rect(-width / 2 + 3, -height / 2 + 3, width - 6, height - 6); ctx.clip(); ctx.strokeStyle = '#f1e2b9'; ctx.lineWidth = 10;
+    for (let i = -3; i < 7; i++) { ctx.beginPath(); ctx.moveTo(-width / 2 + i * 24, height / 2); ctx.lineTo(-width / 2 + i * 24 + height, -height / 2); ctx.stroke(); } ctx.restore();
+    for (const side of [-1, 1]) { const coneX = side * (width / 2 - 9); ctx.fillStyle = '#d97338'; ctx.beginPath(); ctx.moveTo(coneX, -height / 2 - 15); ctx.lineTo(coneX - 6, -height / 2); ctx.lineTo(coneX + 6, -height / 2); ctx.closePath(); ctx.fill(); ctx.fillStyle = '#fff0cd'; ctx.fillRect(coneX - 3, -height / 2 - 6, 6, 3); }
     ctx.restore();
   }
 }
