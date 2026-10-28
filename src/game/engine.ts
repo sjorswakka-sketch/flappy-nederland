@@ -1,5 +1,6 @@
 import { DIFFICULTY, difficultyAt, type Difficulty } from './difficulty';
 import type { VehicleSkin } from '../data/skins';
+import { defaultUpgradeLevels, upgradeEffects, type UpgradeLevels } from '../data/upgrades';
 
 export const WORLD = { width: 480, height: 640, roadLeft: 72, roadRight: 408, laneWidth: 112, playerY: 510, carWidth: 44, carHeight: 76 } as const;
 export const PHYSICS = { step: 1 / 120, steeringSpeed: 520, steeringResponse: 15, sway: 4, reviveGrace: 2, boostCost: 35, boostSeconds: 1.7, boostMultiplier: 1.5 } as const;
@@ -20,6 +21,8 @@ export interface GameSnapshot {
 export interface EngineOptions {
   onScore: (score: number) => void; onGameOver: (score: number) => void;
   onStateChange?: (status: GameStatus) => void; skin: VehicleSkin; sound?: boolean;
+  /** Permanent garage upgrades are frozen for the duration of a run. */
+  upgrades?: UpgradeLevels;
 }
 export function laneCenter(lane: number): number { return WORLD.roadLeft + WORLD.laneWidth * (lane + 0.5); }
 export function sectorAt(distance: number): RoadSector {
@@ -90,6 +93,8 @@ export class GameEngine {
   private readonly reducedMotion: boolean;
   private status: GameStatus = 'ready';
   private score = 0;
+  private scoreRemainder = 0;
+  private upgradeModifiers = upgradeEffects(defaultUpgradeLevels());
   private distance = 0;
   private x = laneCenter(1);
   private renderedX = laneCenter(1);
@@ -121,6 +126,7 @@ export class GameEngine {
   private notificationTime = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly options: EngineOptions) {
+    this.setUpgrades(options.upgrades ?? defaultUpgradeLevels());
     const context = canvas.getContext('2d', { alpha: false });
     if (!context) throw new Error('This browser does not support Canvas 2D.');
     this.ctx = context;
@@ -141,7 +147,7 @@ export class GameEngine {
     this.options.onStateChange?.(status);
   }
   start(): void {
-    this.score = 0; this.distance = 0; this.elapsed = 0;
+    this.score = 0; this.scoreRemainder = 0; this.distance = 0; this.elapsed = 0;
     this.x = this.renderedX = laneCenter(1); this.velocityX = 0;
     this.steering = 0; this.targetX = null; this.rows = []; this.particles = [];
     this.spawnClock = 0; this.invulnerable = 0; this.nearMisses = 0;
@@ -167,7 +173,7 @@ export class GameEngine {
   }
   boost(): boolean {
     if (this.status !== 'playing' || this.boostTime > 0 || this.boostCharge < PHYSICS.boostCost) return false;
-    this.boostCharge -= PHYSICS.boostCost; this.boostTime = PHYSICS.boostSeconds;
+    this.boostCharge -= PHYSICS.boostCost; this.boostTime = PHYSICS.boostSeconds * this.upgradeModifiers.boostDurationMultiplier;
     this.notification = 'NITRO · DOUBLE POINTS'; this.notificationTime = 1;
     this.tone(330, 0.18, 0.03); return true;
   }
@@ -180,6 +186,16 @@ export class GameEngine {
     this.combo = 1; this.comboHits = 0; this.comboClock = 0; this.boostCharge = Math.max(35, this.boostCharge);
     this.changeStatus('paused');
   }
+  /** Purchase effects take hold between runs, never during play or a repair pause. */
+  setUpgrades(levels: UpgradeLevels): boolean {
+    if (this.status === 'playing' || this.status === 'paused') return false;
+    // Shared normalization returns primitive modifiers; callers cannot mutate a run.
+    this.upgradeModifiers = upgradeEffects({ ...levels });
+    return true;
+  }
+  private currentSpeed(difficulty: Difficulty = difficultyAt(this.distance)): number {
+    return difficulty.speed * this.upgradeModifiers.speedMultiplier * (this.boostTime > 0 ? PHYSICS.boostMultiplier : 1);
+  }
   setSkin(skin: VehicleSkin): void { this.options.skin = skin; }
   setSound(sound: boolean): void { this.options.sound = sound; }
   getSnapshot(): GameSnapshot {
@@ -187,7 +203,7 @@ export class GameEngine {
     return {
       status: this.status, score: this.score, distance: this.distance,
       lane: Math.max(0, Math.min(2, Math.floor((this.x - WORLD.roadLeft) / WORLD.laneWidth))),
-      difficulty, speedKph: Math.round(difficulty.speed * (this.boostTime > 0 ? PHYSICS.boostMultiplier : 1) * 0.36),
+      difficulty, speedKph: Math.round(this.currentSpeed(difficulty) * 0.36),
       nearMisses: this.nearMisses, combo: this.combo, boostCharge: this.boostCharge, boostActive: this.boostTime > 0,
       sector: sectorAt(this.distance),
     };
@@ -214,7 +230,14 @@ export class GameEngine {
     } else if (this.status === 'ready') { this.sceneryDistance += delta * 150; this.elapsed += delta; }
     this.draw(); this.frame = requestAnimationFrame(this.tick);
   };
-  private addScore(points: number): void { this.score += points; this.options.onScore(this.score); }
+  private addScore(points: number): void {
+    // Carry fractional bonuses forward: +15% must matter even on one-point passes.
+    this.scoreRemainder += points * this.upgradeModifiers.scoreMultiplier;
+    const wholePoints = Math.floor(this.scoreRemainder + 1e-9);
+    this.scoreRemainder = Math.max(0, this.scoreRemainder - wholePoints);
+    this.score = Math.min(Number.MAX_SAFE_INTEGER, this.score + wholePoints);
+    this.options.onScore(this.score);
+  }
   private nextRow(difficulty: Difficulty): HazardRow {
     let safe = this.lastSafeLane;
     if (this.repeatedSafeLane >= 1 || Math.random() < 0.72) {
@@ -226,28 +249,30 @@ export class GameEngine {
   }
   private update(dt: number): void {
     const difficulty = difficultyAt(this.distance);
-    const speed = difficulty.speed * (this.boostTime > 0 ? PHYSICS.boostMultiplier : 1);
+    const speed = this.currentSpeed(difficulty);
     this.elapsed += dt; this.distance += speed * dt;
     // Fast road texture is independent of fair relative traffic speed: cars are also moving.
     this.sceneryDistance += speed * DIFFICULTY.roadVisualMultiplier * dt;
     this.invulnerable = Math.max(0, this.invulnerable - dt);
     this.boostTime = Math.max(0, this.boostTime - dt);
-    this.boostCharge = Math.min(100, this.boostCharge + dt * 0.5);
+    this.boostCharge = Math.min(100, this.boostCharge + dt * 0.5 * this.upgradeModifiers.boostRechargeMultiplier);
     this.comboClock = Math.max(0, this.comboClock - dt);
     if (!this.comboClock) { this.combo = 1; this.comboHits = 0; }
     this.notificationTime = Math.max(0, this.notificationTime - dt);
     this.shake = Math.max(0, this.shake - dt * 5);
     if (this.nudgeTime > 0) { this.nudgeTime -= dt; if (this.nudgeTime <= 0) this.steering = 0; }
     const previousX = this.renderedX;
-    let wantedVelocity = this.steering * PHYSICS.steeringSpeed;
-    if (this.targetX !== null) wantedVelocity = Math.max(-PHYSICS.steeringSpeed, Math.min(PHYSICS.steeringSpeed, (this.targetX - this.x) * 12));
-    this.velocityX += (wantedVelocity - this.velocityX) * (1 - Math.exp(-PHYSICS.steeringResponse * dt));
+    const steeringSpeed = PHYSICS.steeringSpeed * this.upgradeModifiers.steeringMultiplier;
+    const steeringResponse = PHYSICS.steeringResponse * this.upgradeModifiers.steeringResponseMultiplier;
+    let wantedVelocity = this.steering * steeringSpeed;
+    if (this.targetX !== null) wantedVelocity = Math.max(-steeringSpeed, Math.min(steeringSpeed, (this.targetX - this.x) * 12 * this.upgradeModifiers.steeringResponseMultiplier));
+    this.velocityX += (wantedVelocity - this.velocityX) * (1 - Math.exp(-steeringResponse * dt));
     const nextX = this.x + this.velocityX * dt;
     // Stop at a finger target instead of oscillating across it after a fast drag.
     if (this.targetX !== null && (this.targetX - this.x) * (this.targetX - nextX) <= 0) {
       this.x = this.targetX; this.velocityX = 0;
     } else this.x = Math.max(WORLD.roadLeft + 27, Math.min(WORLD.roadRight - 27, nextX));
-    const sway = Math.sin(this.elapsed * 3.4) * PHYSICS.sway + Math.sin(this.elapsed * 1.8) * 1.5;
+    const sway = (Math.sin(this.elapsed * 3.4) * PHYSICS.sway + Math.sin(this.elapsed * 1.8) * 1.5) * this.upgradeModifiers.swayMultiplier;
     this.renderedX = this.x + sway;
     this.spawnClock += dt;
     if (this.spawnClock >= difficulty.spawnInterval) { this.spawnClock -= difficulty.spawnInterval; this.rows.push(this.nextRow(difficulty)); }
@@ -271,7 +296,7 @@ export class GameEngine {
           hazard.rewarded = true;
           if (!this.invulnerable && hazard.closestGap < 13) {
             this.nearMisses++; this.comboHits++; this.combo = Math.min(5, 1 + Math.floor(this.comboHits / 2)); this.comboClock = 5;
-            this.boostCharge = Math.min(100, this.boostCharge + 14); this.addScore(2 * this.combo);
+            this.boostCharge = Math.min(100, this.boostCharge + 14 * this.upgradeModifiers.boostRechargeMultiplier); this.addScore(2 * this.combo);
             this.notification = 'NEAR MISS  +' + 2 * this.combo; this.notificationTime = 0.8;
             this.tone(780, 0.065, 0.035);
             for (let i = 0; i < 8; i++) this.particles.push({ x: this.renderedX, y: WORLD.playerY + 25, vx: (Math.random() - 0.5) * 90, life: 0.5, color: '#d3fc8b' });
@@ -280,7 +305,7 @@ export class GameEngine {
       }
       if (!row.passed && row.hazards.every(hazard => hazard.rewarded)) {
         row.passed = true; this.addScore(this.combo * (this.boostTime > 0 ? 2 : 1));
-        this.boostCharge = Math.min(100, this.boostCharge + 3);
+        this.boostCharge = Math.min(100, this.boostCharge + 3 * this.upgradeModifiers.boostRechargeMultiplier);
       }
     }
     this.rows = this.rows.filter(row => row.hazards.some(hazard => hazard.y - hazard.height / 2 < WORLD.height + 35));
@@ -312,13 +337,13 @@ export class GameEngine {
     }
     ctx.globalAlpha = 1;
     const skin = this.options.skin;
-    const x = this.status === 'ready' ? laneCenter(1) + Math.sin(this.elapsed * 2) * 3 : this.renderedX;
+    const x = this.status === 'ready' ? laneCenter(1) + Math.sin(this.elapsed * 2) * 3 * this.upgradeModifiers.swayMultiplier : this.renderedX;
     if (!this.invulnerable || Math.floor(this.elapsed * 10) % 2 === 0) {
       if (this.boostTime > 0) {
         ctx.fillStyle = '#84d9ff18'; ctx.beginPath(); ctx.moveTo(x - 20, WORLD.playerY + 32); ctx.lineTo(x - 30, 640); ctx.lineTo(x + 30, 640); ctx.lineTo(x + 20, WORLD.playerY + 32); ctx.closePath(); ctx.fill();
         ctx.fillStyle = '#b6efff'; ctx.fillRect(x - 14, WORLD.playerY + 36, 6, 13 + Math.sin(this.elapsed * 40) * 5); ctx.fillRect(x + 8, WORLD.playerY + 36, 6, 13 + Math.cos(this.elapsed * 35) * 5);
       }
-      const angle = Math.max(-0.16, Math.min(0.16, this.velocityX / 2600)) + Math.sin(this.elapsed * 3.4) * 0.025;
+      const angle = Math.max(-0.16, Math.min(0.16, this.velocityX / 2600)) + Math.sin(this.elapsed * 3.4) * 0.025 * this.upgradeModifiers.swayMultiplier;
       this.drawCar(ctx, x, WORLD.playerY, WORLD.carWidth + (skin.shape === 'royal' ? 5 : skin.shape === 'slim' ? -3 : 0), WORLD.carHeight + (skin.shape === 'royal' ? 5 : 0), skin.body, skin.wing, skin.accent, true, angle);
     }
     if (this.notificationTime && this.status === 'playing') {

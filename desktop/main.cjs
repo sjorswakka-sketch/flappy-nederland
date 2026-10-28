@@ -48,6 +48,14 @@ function requireCheck(condition, name) {
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+async function reloadForSmoke(contents) {
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('The bundled game did not reload.')), 8000);
+    contents.once('did-finish-load', () => { clearTimeout(timer); resolve(); });
+    contents.reload();
+  });
+}
+
 async function smokeTest(window) {
   const contents = window.webContents;
   const initial = await contents.executeJavaScript(`(() => {
@@ -57,14 +65,50 @@ async function smokeTest(window) {
       game: !!canvas && canvas.width > 0 && canvas.height > 0,
       start: !!document.querySelector('#start'),
       banner: !!document.querySelector('#banner'),
+      wallet: document.querySelector('#wallet-balance')?.textContent.trim(),
+      workshop: !!document.querySelector('#workshop'),
+      upgradeButtons: document.querySelectorAll('[data-upgrade]').length,
       nodeBridge: typeof window.require !== 'undefined' || typeof window.process !== 'undefined'
     };
   })()`);
   requireCheck(initial.title.includes(APP_NAME), 'bundled page loads');
   requireCheck(initial.game && initial.start && initial.banner, 'canvas and game screens render');
+  requireCheck(initial.wallet === '0', 'new desktop profile starts with an empty points wallet');
+  requireCheck(initial.workshop && initial.upgradeButtons === 4, 'the four permanent upgrade controls render');
+  requireCheck(await contents.executeJavaScript(`Array.from(document.querySelectorAll('[data-upgrade]')).every(button => button.disabled)`), 'upgrades cannot be bought without earned points');
   requireCheck(!initial.nodeBridge, 'renderer has no Node.js bridge');
   const preferences = contents.getLastWebPreferences();
   requireCheck(preferences.contextIsolation && preferences.sandbox && !preferences.nodeIntegration, 'renderer isolation is enabled');
+
+  // This fixture is written only to smokeProfile, an isolated temporary folder.
+  // It exercises a real purchase through the bundled UI without altering player data.
+  await contents.executeJavaScript(`(() => {
+    const key = 'drunken-joyride:profile:v1';
+    const saved = JSON.parse(localStorage.getItem(key) || '{"version":1,"profile":{}}');
+    saved.profile = saved.profile || {};
+    Object.assign(saved.profile, {
+      best: 0, wallet: 100, lifetimeEarned: 100,
+      upgrades: { engine: 0, handling: 0, nitro: 0, magnet: 0 }, runCredits: []
+    });
+    localStorage.setItem(key, JSON.stringify(saved));
+  })()`);
+  await reloadForSmoke(contents);
+  await contents.executeJavaScript(`(() => {
+    document.querySelector('#nav-garage').click();
+    document.querySelector('[data-upgrade="handling"]').click();
+  })()`);
+  const purchase = await contents.executeJavaScript(`(() => {
+    const saved = JSON.parse(localStorage.getItem('drunken-joyride:profile:v1'));
+    return { wallet: document.querySelector('#wallet-balance').textContent.trim(), profile: saved.profile };
+  })()`);
+  requireCheck(purchase.wallet === '80' && purchase.profile.wallet === 80 && purchase.profile.upgrades.handling === 1, 'a garage purchase spends twenty earned points and saves the upgrade');
+  requireCheck(purchase.profile.best === 0 && purchase.profile.lifetimeEarned === 100, 'spending preserves the highscore and total earned points');
+  await reloadForSmoke(contents);
+  const restored = await contents.executeJavaScript(`(() => {
+    const saved = JSON.parse(localStorage.getItem('drunken-joyride:profile:v1'));
+    return { wallet: document.querySelector('#wallet-balance').textContent.trim(), level: saved.profile.upgrades.handling };
+  })()`);
+  requireCheck(restored.wallet === '80' && restored.level === 1, 'wallet and permanent tuning survive a restart');
 
   await contents.executeJavaScript(`document.querySelector('#start').click()`);
   await wait(120);
@@ -160,7 +204,7 @@ app.whenReady().then(() => {
 });
 
 if (smokeMode) {
-  setTimeout(() => finishSmoke(new Error('Desktop smoke test exceeded 20 seconds.')), 20_000).unref();
+  setTimeout(() => finishSmoke(new Error('Desktop smoke test exceeded 30 seconds.')), 30_000).unref();
 }
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

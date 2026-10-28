@@ -1,6 +1,6 @@
 {
   "name": "drunken-joyride",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "type": "module",
   "description": "An endless midnight arcade drive through traffic and roadworks.",

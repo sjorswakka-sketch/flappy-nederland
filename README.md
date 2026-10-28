@@ -1,6 +1,6 @@
 # Drunken Joyride
 
-A midnight arcade drive through Dutch roads. Weave through moving traffic, thread roadworks, build near-miss combos, and spend your boost on one more personal best. Built with TypeScript, Vite, and Canvas 2D.
+A midnight arcade drive through Dutch roads. Weave through moving traffic, thread roadworks, build near-miss combos, and turn earned points into permanent car upgrades for the next run. Built with TypeScript, Vite, and Canvas 2D.
 
 **[Play Drunken Joyride online](https://sjorswakka-sketch.github.io/flappy-nederland/)** · No installation needed. The existing repository and URL are retained after the redesign.
 
@@ -14,7 +14,7 @@ A midnight arcade drive through Dutch roads. Weave through moving traffic, threa
 
 No installer, Node.js, or local web server is needed to play. Keep the executable alongside its extracted resources; copying only the `.exe` does not produce a working app. This is an unsigned test build.
 
-The game is bundled with Electron and gameplay works offline. Desktop records and car unlocks are stored separately from browser progress. Website AdSense integration is intended for the hosted browser game; the Windows version keeps advertisement placeholders.
+The game is bundled with Electron and gameplay works offline. Desktop records, wallet, upgrades, and car unlocks are stored separately from browser progress. Website AdSense integration is intended for the hosted browser game; the Windows version keeps advertisement placeholders.
 
 Every push to `main` and every pull request creates a Windows build in [GitHub Actions](https://github.com/sjorswakka-sketch/flappy-nederland/actions). A successful main build updates the downloadable `windows-preview` prerelease after tests and a launch check of the packaged app pass. Each run also retains a commit-specific Actions artifact; pull-request builds are available there without updating the public preview. The workflow can be started manually from the Actions tab.
 
@@ -41,11 +41,31 @@ The ZIP is written to `release/`. Build logs and checks are available in the cor
 4. Pass obstacles to score. Close passes earn near-miss points and grow a combo up to **5×**; the combo drops if you leave too long between near misses. A collision still ends the run.
 5. During a run, press **Space or Shift** to use boost. Boost spends charge, makes the road arrive faster, and doubles obstacle-row points. Overtakes and near misses recover charge. Boost does **not** protect you from crashes.
 6. Press **P** or **Escape**, or use the pause button, to pause. Leaving the tab also pauses. Use **Space** to start or restart when a run is not active.
-7. Chase the run targets for distance, near misses, and combo. At game over, review your distance, near misses, and best combo, then enter a driver name and continent, save the score, check the top ten, and try again. An optional reward demo offers one repair and continuation per run.
+7. Chase the run targets for distance, near misses, and combo. Your earned points are banked in a persistent wallet as you score. At game over, review your run, buy permanent upgrades in the garage, and drive again to earn points faster. An optional reward demo offers one repair and continuation per run.
+8. Enter a driver name and continent to save a leaderboard score. Spending wallet points does not reduce your run score or personal best.
 
 Speed, traffic frequency, and obstacle sizes increase with distance. Sectors rotate through **City Run, Canal Express, Tunnel Vision, and Roadworks**, changing the scene and available road width. Generated traffic leaves a route, but you must react to moving vehicles and shrinking margins.
 
-Car choice, sound preference, best score, unlocked cars, and submitted scores stay on this browser. Storage failures do not prevent playing, but progress may then last only for the session. Clearing site data resets progress. New `drunken-joyride:*` storage keys keep driving scores separate from the previous game.
+Car choice, sound preference, wallet balance, permanent upgrades, best score, unlocked cars, and submitted scores stay on this browser. Storage failures do not prevent playing, but progress may then last only for the session. Clearing site data resets progress. Existing driving profiles keep their best score and unlocked cars when upgraded to this version; the new wallet starts at zero rather than inventing past earnings.
+
+## Earn points, upgrade, repeat
+
+Each new point earned during a drive is also added to your wallet. Points stay banked after a crash, so a short run still helps fund the next upgrade. A repaired continuation keeps the same run ID: previously credited points cannot be collected twice by continuing or saving the same score again.
+
+Spend points in the garage's upgrade workshop between runs:
+
+- **Engine:** raises driving speed, so you cover road and reach new scoring opportunities faster.
+- **Handling:** improves steering response and control while reducing sway, helping you survive tighter traffic.
+- **Nitro:** extends boost and improves charge recovery, allowing more bursts of speed and double obstacle-row points.
+- **Points multiplier:** increases score earned from overtakes and near misses; those extra points are also banked for future upgrades.
+
+The first levels cost **25 points for Engine, 20 for Handling, 30 for Nitro, and 35 for the Points multiplier**. The workshop shows the current effect, next effect, price, and any points still needed before a purchase.
+
+The loop is **drive → bank points → buy upgrades → survive and score better → buy more upgrades**. Upgrades are permanent for every car in this browser or desktop profile. Each level has a higher point cost, with no fixed gameplay level cap. Opening the garage pauses an active drive, so you can browse and purchase without losing the run. New tuning takes effect on the **next** drive and never changes the paused run's handling or scoring. The wallet is separate from the personal best and leaderboard score.
+
+Upgrade definitions, costs, and effect curves live in [`src/data/upgrades.ts`](src/data/upgrades.ts). Score crediting and purchases live in [`src/services/economy.ts`](src/services/economy.ts). Both use validated whole-number point balances, and insufficient funds leave the wallet and upgrade level unchanged. Some handling and boost effects approach useful limits to keep the game controllable, while the economy can continue progressing.
+
+Upgrade points are earned by playing. This version does not sell points or upgrades for money. The advertisement slot, optional rewarded repair and cosmetic-car demos, and remove-ads preview remain separate from the upgrade economy; they are not real paid transactions.
 
 ## Run and open locally
 
@@ -74,6 +94,7 @@ Open the preview URL, normally **http://localhost:4173**. Deploy the generated `
 - Frame-rate independent physics, responsive high-DPI rendering, continuous keyboard steering, and hold/drag touch controls.
 - Near-miss combos, charge-based boost, moving traffic, and rotating road sectors that alter the available space.
 - Run targets and a results summary showing distance, near misses, and peak combo.
+- Persistent earned-points wallet and four permanent upgrade paths: speed, handling, nitro, and points yield.
 - Comic car sway, optional synthesized sound, pause, crash, restart, and one rewarded repair per run.
 - Eight unlockable cars with different bodies, colors, lights, and effects.
 - Indefinite distance-based difficulty progression, with tuning in one module.
@@ -120,8 +141,8 @@ Replace the adapter with an HTTP service to connect a backend. Validate submissi
 ```text
 src/
   game/          # Driving, drawing, collisions and difficulty
-  data/          # Vehicle definitions
-  services/      # Profile, leaderboard and ad adapters
+  data/          # Vehicle definitions, upgrade costs and effect curves
+  services/      # Profile, upgrade economy, leaderboard and ad adapters
   main.ts        # Screens, input and service integration
   car.ts         # Garage SVG vehicle previews
   style.css      # Responsive interface

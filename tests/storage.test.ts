@@ -57,4 +57,42 @@ describe('versioned browser profile', () => {
     expect(store.loadProfile()).toMatchObject({ best: 300, name: 'Night Driver' });
     expect(store.loadProfile().unlockedSkins).toContain('roadking');
   });
+
+  it('migrates old profiles without inventing spendable points or losing progress', async () => {
+    const store = await import('../src/services/storage');
+    localStorage.setItem(store.PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, profile: {
+      best: 150, selectedSkin: 'taxi', unlockedSkins: ['starter', 'taxi'], name: 'Existing Driver', continent: 'Europe', sound: true, adsRemoved: true,
+    } }));
+    expect(store.loadProfile()).toMatchObject({ best: 150, selectedSkin: 'taxi', name: 'Existing Driver', sound: true, adsRemoved: true,
+      wallet: 0, lifetimeEarned: 0, upgrades: { engine: 0, handling: 0, nitro: 0, magnet: 0 }, runCredits: [] });
+  });
+
+  it('preserves banked points, upgrades and the continuation checkpoint across reloads', async () => {
+    let store = await import('../src/services/storage');
+    const economy = await import('../src/services/economy');
+    const profile = store.defaultProfile();
+    economy.creditRun(profile, 'saved-run', 100);
+    economy.purchaseUpgrade(profile, 'handling');
+    store.saveProfile(profile);
+    profile.upgrades.handling = 99;
+    profile.runCredits[0].score = 999;
+    vi.resetModules();
+    store = await import('../src/services/storage');
+    const loaded = store.loadProfile();
+    expect(loaded).toMatchObject({ wallet: 80, lifetimeEarned: 100, upgrades: { handling: 1 }, runCredits: [{ runId: 'saved-run', score: 100 }] });
+    expect(economy.creditRun(loaded, 'saved-run', 100)).toBe(0);
+    expect(economy.creditRun(loaded, 'saved-run', 125)).toBe(25);
+    loaded.upgrades.handling = 77;
+    loaded.runCredits[0].score = 333;
+    expect(store.loadProfile()).toMatchObject({ upgrades: { handling: 1 }, runCredits: [{ score: 100 }] });
+  });
+
+  it('sanitizes corrupt balances, levels and checkpoint records independently', async () => {
+    const store = await import('../src/services/storage');
+    localStorage.setItem(store.PROFILE_STORAGE_KEY, JSON.stringify({ version: 1, profile: { ...store.defaultProfile(),
+      wallet: -2, lifetimeEarned: 0.5, upgrades: { engine: 2, handling: -4, nitro: 1.5, magnet: 4 },
+      runCredits: [{ runId: 'same', score: 20 }, { runId: 'same', score: 8 }, { runId: '', score: 12 }, { runId: 'negative', score: -2 }],
+    } }));
+    expect(store.loadProfile()).toMatchObject({ wallet: 0, lifetimeEarned: 0, upgrades: { engine: 2, handling: 0, nitro: 0, magnet: 4 }, runCredits: [{ runId: 'same', score: 20 }] });
+  });
 });

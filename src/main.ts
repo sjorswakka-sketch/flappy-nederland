@@ -6,6 +6,8 @@ import { LocalLeaderboardService, CONTINENTS, type Continent, type Period, type 
 import { DemoAdProvider, getDisplayAdConfig, mountDisplayAd, type AdPlacement, type DisplayAdStatus } from './services/ads';
 import { icon } from './icons';
 import { carSvg } from './car';
+import { UPGRADE_DEFINITIONS, upgradeCost, upgradeEffects, type UpgradeId } from './data/upgrades';
+import { creditRun, purchaseUpgrade } from './services/economy';
 
 const $ = <T extends HTMLElement = HTMLElement>(q: string) => document.querySelector<T>(q)!;
 const profile = loadProfile();
@@ -16,7 +18,7 @@ let runId = '';
 let lastScore = 0;
 let continued = false;
 let starting = false;
-let view: 'play' | 'leaderboard' = 'play';
+let view: 'play' | 'leaderboard' | 'garage' = 'play';
 let scope: 'worldwide' | 'continent' = 'worldwide';
 let period: Period = 'all';
 let boardRequest = 0;
@@ -35,7 +37,7 @@ $('#app').innerHTML = `
   <header class="site-header">
     <a class="brand" href="#" aria-label="Drunken Joyride home"><span class="brand-mark">${icon('car',29)}</span><span>DRUNKEN<span class="brand-light">JOYRiDE<span class="brand-dot">.</span></span></span></a>
     <nav aria-label="Main navigation"><button class="nav-button active" id="nav-play">${icon('road',17)} Drive</button><button class="nav-button" id="nav-garage">${icon('car',18)} Garage</button><button class="nav-button" id="nav-board">${icon('trophy',18)} Leaderboards</button></nav>
-    <div class="header-tools"><span class="arcade-badge">NIGHT SHIFT · V2.1</span><button class="icon-button" id="sound" aria-label="Toggle sound"></button><button class="icon-button" id="help" aria-label="How to play">${icon('help')}</button></div>
+    <div class="header-tools"><button class="wallet-pill" id="open-wallet" aria-label="Open upgrade garage"><span>PTS</span><strong id="wallet-balance">0</strong></button><span class="arcade-badge">NIGHT SHIFT · V2.2</span><button class="icon-button" id="sound" aria-label="Toggle sound"></button><button class="icon-button" id="help" aria-label="How to play">${icon('help')}</button></div>
   </header>
   <main>
     <section class="page-intro"><div><div class="eyebrow"><span class="tiny-line"></span> AFTER HOURS. ALL GAS.</div><h1>Bad decisions.<br><span>Great reflexes.</span></h1></div><div class="intro-side"><span class="route-tag">A2 &nbsp; / &nbsp; THE NETHERLANDS</span><p>Cut tighter gaps. Chain bigger combos.<br>Speed is the easy part.</p></div></section>
@@ -60,13 +62,20 @@ $('#app').innerHTML = `
         </section>
         <aside class="sidebar">
           <section class="best-card"><div class="best-icon">${icon('trophy',25)}</div><div><span class="eyebrow">YOUR BEST RUN</span><strong id="best">0 <small>points</small></strong></div><span class="small-note">BEAT<br>YOURSELF.</span></section>
-          <section class="garage-card" id="garage"><div class="section-heading"><div><span class="eyebrow">CHOOSE YOUR BAD IDEA</span><h2>The garage<span>.</span></h2></div><span id="collection-count" class="count-pill"></span></div><div class="car-grid" id="skins"></div><div class="selected-car" id="car-detail"></div></section>
+          <section class="bank-card"><span class="eyebrow">DRIVE. BANK. UPGRADE. REPEAT.</span><div class="bank-total"><strong id="wallet-side">0</strong><span>spendable points</span></div><p id="upgrade-ready">Earn points on the road. Build a better ride.</p><button class="primary full" id="open-workshop">Tune your ride ${icon('wrench',17)}</button><div class="active-tuning" id="active-tuning"></div></section>
           <section class="contracts-card"><div class="section-heading"><div><span class="eyebrow">MAKE THIS RUN COUNT</span><h3>Night contracts</h3></div><span class="count-pill" id="contract-count">0 / 3</span></div><div class="contract" id="contract-near"><div><strong>Needlework</strong><span>3 near misses</span></div><span class="contract-progress" id="near-progress">0 / 3</span></div><div class="contract" id="contract-distance"><div><strong>Long way home</strong><span>Drive 400 metres</span></div><span class="contract-progress" id="distance-progress">0 / 400</span></div><div class="contract" id="contract-combo"><div><strong>Risk collector</strong><span>Reach a ×4 combo</span></div><span class="contract-progress" id="combo-progress">×1 / ×4</span></div><p>Close passes build combo and recharge boost. A boost makes you faster, not invincible.</p></section>
           <button class="leaderboard-link" id="quick-board"><span>${icon('globe')} See who owns the night</span>${icon('arrow')}</button>
           <button class="remove-trigger garage-remove">${icon('shield',16)} Remove ads · preview</button>
         </aside>
       </div>
     </div>
+
+    <section id="garage-view" class="garage-view" hidden>
+      <div class="workshop-heading"><div><span class="eyebrow">EVERY RUN BUILDS YOUR NEXT ONE</span><h2>Earn it. Tune it.<br><span>Go again.</span></h2><p>Permanent upgrades for every car. Better runs pay for better upgrades.</p></div><div class="garage-balance"><span>AVAILABLE TO SPEND</span><strong id="garage-wallet">0</strong><small>POINTS</small></div></div>
+      <div class="garage-toolbar"><p id="tuning-status">Tuning activates on your next run. Spending points never lowers your best score.</p><button class="secondary" id="garage-back">Back to the road ${icon('arrow',17)}</button></div>
+      <section id="workshop" class="workshop" aria-label="Permanent car upgrades"><div class="section-heading"><div><span class="eyebrow">THE WORKSHOP</span><h3>Small investments. Bigger nights.</h3></div><span id="upgrade-total" class="count-pill">0 upgrades</span></div><div id="upgrade-grid" class="upgrade-grid"></div></section>
+      <div class="garage-bottom"><section class="garage-card" id="garage"><div class="section-heading"><div><span class="eyebrow">CHOOSE YOUR BAD IDEA</span><h2>The garage<span>.</span></h2></div><span id="collection-count" class="count-pill"></span></div><div class="car-grid" id="skins"></div><div class="selected-car" id="car-detail"></div></section><section class="economy-explainer"><span class="eyebrow">HOW THE LOOP WORKS</span><h3>Every point has a job.</h3><ol><li><strong>Drive and earn.</strong><span>Overtakes, close passes and combos bank points as you play.</span></li><li><strong>Spend in the workshop.</strong><span>Choose more speed, tighter control, stronger nitro or more points per overtake.</span></li><li><strong>Go further, earn faster.</strong><span>Upgrades stay unlocked for every future run. Each next level costs more.</span></li></ol><div class="lifetime-stat"><span>TOTAL POINTS EARNED</span><strong id="lifetime-earned">0</strong></div></section></div>
+    </section>
     <section class="leaderboard-view" id="leaderboard-view" hidden>
       <div class="board-heading"><div><span class="eyebrow">THE NIGHT SHIFT</span><h2>Legends of the fast lane.</h2><p>Ten runs worth chasing. Put your name on the asphalt.</p></div><button class="secondary" id="back-play">Back to game ${icon('arrow')}</button></div>
       <div class="board-toolbar"><div class="tabs" aria-label="Leaderboard region"><button data-scope="worldwide" class="active">Worldwide</button><button data-scope="continent">Continent</button></div><label class="continent-select">Continent<select id="board-continent"></select></label></div>
@@ -76,7 +85,7 @@ $('#app').innerHTML = `
     </section>
   </main>
   <footer><span>A fictional arcade trip. Made for one more run.</span><span class="footer-brand">DRUNKEN JOYRIDE <span class="orange-dot"></span> AFTER HOURS ARCADE</span><button class="text-button" id="about">About &amp; ads</button></footer>
-  <dialog id="over-dialog" class="over-dialog" aria-label="Run over"><button class="dialog-x" id="close-over" aria-label="Close game over">${icon('close')}</button><div class="over-layout"><section><span class="eyebrow" id="over-eyebrow">THAT'LL LEAVE A MARK</span><h2>Wrecked.<br>Run it back?</h2><p class="over-subtitle">The road won this round.</p><div class="score-pair"><div><span>THIS RUN</span><strong id="final-score">0</strong></div><div><span>PERSONAL BEST</span><strong id="final-best">0</strong></div></div><div class="run-stats"><div><strong id="final-distance">0m</strong><span>DISTANCE</span></div><div><strong id="final-near">0</strong><span>NEAR MISSES</span></div><div><strong id="final-combo">×1</strong><span>PEAK COMBO</span></div></div><p class="run-verdict" id="run-verdict">Keep it close. Keep it clean.</p><p class="unlock-notice" id="unlock-notice" hidden></p><button class="primary full" id="restart">One more run ${icon('restart')}</button><button class="secondary full" id="continue">${icon('wrench',17)} Repair &amp; continue · demo</button><span class="fine-print">One repair per run. Reward ad is a demo.</span><button class="text-button remove-trigger">Remove ads · preview</button></section><section class="over-board"><div class="section-heading"><div><span class="eyebrow">WORLDWIDE · ALL TIME</span><h3>Top 10 drivers</h3></div>${icon('trophy',23)}</div><form id="score-form"><div class="name-row"><label>Your driver name<input id="driver-name" maxlength="20" placeholder="e.g. Midnight Racer" required autocomplete="nickname"></label><label>Continent<select id="driver-continent"></select></label></div><button class="secondary full" type="submit" id="submit-score">Save my run ${icon('arrow',17)}</button><p id="submit-status" class="fine-print" role="status"></p></form><p class="fine-print demo-caption">LOCAL DEMO · samples are marked</p><div id="over-table" class="over-table"></div><button class="text-button" id="over-all-boards">Explore all leaderboards ${icon('arrow',16)}</button></section></div></dialog>
+  <dialog id="over-dialog" class="over-dialog" aria-label="Run over"><button class="dialog-x" id="close-over" aria-label="Close game over">${icon('close')}</button><div class="over-layout"><section><span class="eyebrow" id="over-eyebrow">THAT'LL LEAVE A MARK</span><h2>Wrecked.<br>Run it back?</h2><p class="over-subtitle">The road won this round.</p><div class="score-pair"><div><span>THIS RUN</span><strong id="final-score">0</strong></div><div><span>PERSONAL BEST</span><strong id="final-best">0</strong></div></div><div class="run-stats"><div><strong id="final-distance">0m</strong><span>DISTANCE</span></div><div><strong id="final-near">0</strong><span>NEAR MISSES</span></div><div><strong id="final-combo">×1</strong><span>PEAK COMBO</span></div></div><p class="run-verdict" id="run-verdict">Keep it close. Keep it clean.</p><div class="banked-summary"><span>POINTS BANKED THIS RUN</span><strong id="run-banked">+0</strong><small>Ready to invest in permanent upgrades.</small></div><button class="secondary full workshop-from-over" id="over-workshop">Spend points on upgrades ${icon('wrench',17)}</button><p class="unlock-notice" id="unlock-notice" hidden></p><button class="primary full" id="restart">One more run ${icon('restart')}</button><button class="secondary full" id="continue">${icon('wrench',17)} Repair &amp; continue · demo</button><span class="fine-print">One repair per run. Reward ad is a demo.</span><button class="text-button remove-trigger">Remove ads · preview</button></section><section class="over-board"><div class="section-heading"><div><span class="eyebrow">WORLDWIDE · ALL TIME</span><h3>Top 10 drivers</h3></div>${icon('trophy',23)}</div><form id="score-form"><div class="name-row"><label>Your driver name<input id="driver-name" maxlength="20" placeholder="e.g. Midnight Racer" required autocomplete="nickname"></label><label>Continent<select id="driver-continent"></select></label></div><button class="secondary full" type="submit" id="submit-score">Save my run ${icon('arrow',17)}</button><p id="submit-status" class="fine-print" role="status"></p></form><p class="fine-print demo-caption">LOCAL DEMO · samples are marked</p><div id="over-table" class="over-table"></div><button class="text-button" id="over-all-boards">Explore all leaderboards ${icon('arrow',16)}</button></section></div></dialog>
   <dialog id="info-dialog" class="info-dialog" aria-label="Game information"><button class="dialog-x" data-close="info-dialog" aria-label="Close information">${icon('close')}</button><div id="info-content"></div></dialog>
   <dialog id="ad-dialog" class="info-dialog ad-dialog" aria-label="Simulated reward advertisement"><span class="eyebrow">AD PROVIDER PREVIEW</span><div class="demo-ad-art">${carSvg(SKINS[0],100)}<span>Pit stop.<br>Big comeback.</span></div><h2 id="ad-heading">Rewarded ad demo</h2><p>This is a simulated reward placement. No real video ad is connected and no money is charged.</p><button class="primary full" id="ad-complete" disabled>Complete demo</button><button class="text-button" id="ad-cancel">Cancel · no reward</button></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
@@ -86,6 +95,7 @@ function persist() { saveProfile(profile); }
 function notify(message: string) { clearTimeout(toastTimer); $('#toast').textContent=message; $('#toast').hidden=false; toastTimer=setTimeout(()=>$('#toast').hidden=true,4000); }
 function updateProfileUI() {
   $('#best').innerHTML=`${profile.best} <small>points</small>`;
+  updateWalletUI();
   $('#sound').innerHTML=icon(profile.sound ? 'sound':'mute');
   $('#sound').setAttribute('aria-label', profile.sound ? 'Mute sound' : 'Enable sound');
   $('#sound').setAttribute('aria-pressed',String(profile.sound));
@@ -100,8 +110,9 @@ function renderSkins() {
   const active=unlocked(preview.id);
   $('#car-detail').innerHTML=`<div><strong>${preview.name}</strong><span>${active ? (selected.id===preview.id?'Ready to rule the road.':'A new look for your next run.'):`Reach ${preview.unlockScore} points or complete a reward demo.`}</span></div>${active ? `<span class="selected-label">${icon('check',14)} Selected</span>` : `<button class="reward-button" id="unlock-skin">${icon('play',14)} Unlock · demo</button>`}`;
 }
-const engine = new GameEngine($('#game'), {skin:selected,sound:profile.sound,onScore:score=>{
+const engine = new GameEngine($('#game'), {skin:selected,sound:profile.sound,upgrades:profile.upgrades,onScore:score=>{
   $('#live-score').textContent=String(score);
+  if(runId&&creditRun(profile,runId,score)>0){persist();updateWalletUI();if(view==='garage')renderUpgrades();}
 },onGameOver:finishRun,onStateChange:status=>{
   $('#ready').hidden=status!=='ready'; $('#paused').hidden=status!=='paused'; $('#hud').hidden=status==='ready'||status==='over';
   document.body.classList.toggle('in-run',status==='playing');
@@ -134,7 +145,7 @@ async function startRun() {
   // Run IDs deduplicate local submissions; they are not security credentials.
   runId=globalThis.crypto?.randomUUID?.() ?? `run-${Date.now()}-${Math.random().toString(36).slice(2)}`; continued=false;lastScore=0;
   $('#submit-status').textContent='';$<HTMLButtonElement>('#submit-score').disabled=false;
-  setView('play'); peakCombo=1;lastNearMisses=0;clearTimeout(riskTimer);$('#risk-callout').hidden=true;clearControls();engine.start();starting=false;updateTelemetry();
+  setView('play'); peakCombo=1;lastNearMisses=0;clearTimeout(riskTimer);$('#risk-callout').hidden=true;clearControls();engine.setUpgrades(profile.upgrades);engine.setSkin(selected);engine.start();starting=false;updateTelemetry();
   $('#drive-shell').scrollIntoView({behavior:'instant',block:'center'});
   $('#game').focus({preventScroll:true});
 }
@@ -146,6 +157,8 @@ function finishRun(score: number) {
   $('#final-combo').textContent='×'+peakCombo;
   const completed=[snapshot.nearMisses>=3,snapshot.distance>=4000,peakCombo>=4].filter(Boolean).length;
   $('#run-verdict').textContent=completed===3?'NIGHT SHIFT COMPLETE · 3/3 CONTRACTS':completed>0?`${completed}/3 CONTRACTS COMPLETE · RUN IT BACK`:snapshot.distance>1200?'GOOD PACE. NOW CHASE THE NEAR MISSES.':'THE NIGHT DOES NOT GIVE SECOND CHANCES.';
+  const paidNow=creditRun(profile,runId,score);if(paidNow>0)persist();
+  $('#run-banked').textContent='+'+score.toLocaleString();
   lastScore=score; const oldBest=profile.best;
   profile.best=Math.max(profile.best,score);
   const newly=SKINS.filter(s=>score>=s.unlockScore&&!unlocked(s.id));
@@ -269,16 +282,59 @@ $('#car-detail').onclick=async e=>{
 };
 function setView(next: typeof view) {
   if(next!=='play')pauseGame();view=next;
-  $('#play-view').hidden=next!=='play';$('#leaderboard-view').hidden=next!=='leaderboard';
+  $('#play-view').hidden=next!=='play';$('#leaderboard-view').hidden=next!=='leaderboard';$('#garage-view').hidden=next!=='garage';
+  if(next==='garage')renderUpgrades();
   if(next==='play'&&engine.getSnapshot().status==='over')showReadyAfterOver();
   if(next==='play')$('#game').focus({preventScroll:true});
-  $('#nav-play').classList.toggle('active',next==='play');$('#nav-board').classList.toggle('active',next==='leaderboard');
+  $('#nav-play').classList.toggle('active',next==='play');$('#nav-board').classList.toggle('active',next==='leaderboard');$('#nav-garage').classList.toggle('active',next==='garage');
   if(next==='leaderboard')void loadBoard();
 }
 $('#nav-play').onclick=()=>setView('play');$('.brand').onclick=e=>{e.preventDefault();setView('play');};
-$('#nav-garage').onclick=()=>{setView('play');pauseGame();$('#garage').scrollIntoView({behavior:'smooth',block:'center'});$('#skins button').focus({preventScroll:true});};
+function openGarage(){$<HTMLDialogElement>('#over-dialog').close();setView('garage');window.scrollTo({top:0,behavior:'smooth'});}
+$('#nav-garage').onclick=openGarage;
+$('#open-wallet').onclick=openGarage;
+$('#open-workshop').onclick=openGarage;
+$('#over-workshop').onclick=openGarage;
+$('#garage-back').onclick=()=>setView('play');
 for(const id of ['nav-board','quick-board','over-all-boards'])$('#'+id).onclick=()=>{$<HTMLDialogElement>('#over-dialog').close();setView('leaderboard');window.scrollTo({top:0,behavior:'smooth'});};
 $('#back-play').onclick=()=>setView('play');
+
+
+const formatPoints=(value:number)=>value.toLocaleString();
+const upgradeIcons:Record<UpgradeId,string>={engine:'gauge',handling:'steer',nitro:'spark',magnet:'trophy'};
+function effectLabel(id:UpgradeId,level:number):string{
+  const levels={...profile.upgrades,[id]:level};const effect=upgradeEffects(levels);
+  if(id==='engine')return '+'+Math.round((effect.speedMultiplier-1)*100)+'% road speed';
+  if(id==='handling')return '+'+Math.round((effect.steeringMultiplier-1)*100)+'% steering · '+Math.round((1-effect.swayMultiplier)*100)+'% less sway';
+  if(id==='nitro')return (1.7*effect.boostDurationMultiplier).toFixed(1)+'s boost · +'+Math.round((effect.boostRechargeMultiplier-1)*100)+'% recharge';
+  return '×'+effect.scoreMultiplier.toFixed(2)+' points per reward';
+}
+function updateWalletUI(){
+  const balance=formatPoints(profile.wallet);
+  $('#wallet-balance').textContent=balance;$('#wallet-side').textContent=balance;$('#garage-wallet').textContent=balance;
+  $('#lifetime-earned').textContent=formatPoints(profile.lifetimeEarned);
+  const affordable=UPGRADE_DEFINITIONS.filter(item=>upgradeCost(item.id,profile.upgrades[item.id])<=profile.wallet).length;
+  $('#upgrade-ready').textContent=affordable?`${affordable} upgrades affordable. Put your points to work.`:'Keep driving. Every banked point gets you closer to your next upgrade.';
+  const effects=upgradeEffects(profile.upgrades);
+  $('#active-tuning').innerHTML=`<span>NEXT RUN</span><strong>+${Math.round((effects.speedMultiplier-1)*100)}% speed</strong><strong>×${effects.scoreMultiplier.toFixed(2)} points</strong>`;
+}
+function renderUpgrades(){
+  updateWalletUI();
+  $('#tuning-status').textContent=engine.getSnapshot().status==='paused'?'Your current run is paused. Purchases activate on the NEXT run; return to resume this one.':'Tuning activates on your next run. Spending points never lowers your best score.';
+  $('#upgrade-total').textContent=Object.values(profile.upgrades).reduce((sum,level)=>sum+level,0)+' upgrade levels';
+  $('#upgrade-grid').innerHTML=UPGRADE_DEFINITIONS.map(item=>{
+    const level=profile.upgrades[item.id],cost=upgradeCost(item.id,level),canBuy=profile.wallet>=cost&&cost<Number.MAX_SAFE_INTEGER;
+    const description=item.id==='engine'?'More speed means more road and more scoring opportunities.':item.id==='handling'?'Tighter steering, faster response and less drunken sway.':item.id==='nitro'?'Longer boosts and faster charge from every source.':'Multiply every score reward. More points to reinvest.';
+    return `<article class="upgrade-card"><div class="upgrade-card-top"><span class="upgrade-icon">${icon(upgradeIcons[item.id],25)}</span><span class="upgrade-level">LEVEL ${level}</span></div><h3>${item.name}</h3><p>${description}</p><div class="upgrade-effect"><span>CURRENT</span><strong>${effectLabel(item.id,level)}</strong><span>NEXT LEVEL</span><strong>${effectLabel(item.id,level+1)}</strong></div><button class="upgrade-buy ${canBuy?'affordable':''}" data-upgrade="${item.id}" ${canBuy?'':'disabled'} aria-label="Upgrade ${item.name} for ${cost} points"><span>${canBuy?'Upgrade':'Need '+formatPoints(Math.max(0,cost-profile.wallet))+' more'}</span><strong>${formatPoints(cost)} <small>PTS</small></strong></button></article>`;
+  }).join('');
+}
+$('#upgrade-grid').onclick=e=>{
+  const button=(e.target as HTMLElement).closest<HTMLButtonElement>('[data-upgrade]');if(!button)return;
+  const id=button.dataset.upgrade as UpgradeId;const result=purchaseUpgrade(profile,id);
+  if(!result.ok){notify(result.reason==='insufficient'?'Not enough banked points yet.':'This upgrade cannot be purchased.');renderUpgrades();return;}
+  persist();engine.setUpgrades(profile.upgrades);renderUpgrades();
+  notify(UPGRADE_DEFINITIONS.find(item=>item.id===id)!.name+' upgraded to level '+result.level+'. Active next run.');
+};
 
 // Names are always placed through textContent, never interpolated into markup.
 function table(entries: LeaderboardEntry[], compact=false): HTMLElement {
@@ -305,11 +361,11 @@ $('#score-form').onsubmit=async e=>{e.preventDefault();const button=$<HTMLButton
 }catch{button.disabled=false;$('#submit-status').textContent='Could not save. Please try again.';}};
 
 function info(content: string){pauseGame();$('#info-content').innerHTML=content;$<HTMLDialogElement>('#info-dialog').showModal();}
-$('#help').onclick=()=>info(`<span class="eyebrow">CRASH COURSE · NIGHT SHIFT</span><h2>Close counts.<br>Contact doesn't.</h2><p><strong>Hold</strong> <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> to steer freely across the road. On a phone, hold the left/right controls or drag your car's target across the road.</p><p>Pass close to traffic to earn <strong>near misses</strong>. They grow your combo up to ×5 and refill boost. Combo fades when you stop taking risks. Watch traffic indicators: other drivers can change lanes.</p><p>Press <kbd>SPACE</kbd> or <kbd>SHIFT</kbd>, or tap BOOST, to spend 35 charge on a burst of speed. Boost adds speed and scoring potential; it never makes you invincible.</p><p>City streets, canal expressways, tunnels and roadworks change the rhythm. Trucks, narrowing gaps and denser traffic demand real steering. Clear the three night contracts for a complete run.</p><p>Press <kbd>SPACE</kbd> to start/restart; <kbd>P</kbd> or <kbd>ESC</kbd> pauses. One optional rewarded repair is available per run. Car unlocks stay cosmetic.</p>`);
+$('#help').onclick=()=>info(`<span class="eyebrow">CRASH COURSE · NIGHT SHIFT</span><h2>Close counts.<br>Contact doesn't.</h2><p><strong>Hold</strong> <kbd>←</kbd> / <kbd>→</kbd> or <kbd>A</kbd> / <kbd>D</kbd> to steer freely across the road. On a phone, hold the left/right controls or drag your car's target across the road.</p><p>Pass close to traffic to earn <strong>near misses</strong>. They grow your combo up to ×5 and refill boost. Combo fades when you stop taking risks. Watch traffic indicators: other drivers can change lanes.</p><p>Press <kbd>SPACE</kbd> or <kbd>SHIFT</kbd>, or tap BOOST, to spend 35 charge on a burst of speed. Boost adds speed and scoring potential; it never makes you invincible.</p><p>City streets, canal expressways, tunnels and roadworks change the rhythm. Trucks, narrowing gaps and denser traffic demand real steering. Clear the three night contracts for a complete run.</p><p>Press <kbd>SPACE</kbd> to start/restart; <kbd>P</kbd> or <kbd>ESC</kbd> pauses. One optional rewarded repair is available per run. Car skins stay cosmetic. Permanent workshop upgrades improve speed, handling, nitro and point earnings for every car.</p>`);
 $('#sound').onclick=()=>{profile.sound=!profile.sound;persist();engine.setSound(profile.sound);updateProfileUI();if(engine.getSnapshot().status==='playing')$('#game').focus({preventScroll:true});};
 document.querySelectorAll('.remove-trigger').forEach(b=>b.addEventListener('click',()=>info(`<span class="eyebrow">MORE ROAD, FEWER INTERRUPTIONS</span><h2>Drive ad-free.</h2><p>This is a purchase-flow placeholder. No payment is collected. Try the ad-free experience on this browser: it hides the banner and between-run demos. Optional rewarded demos remain available.</p><button class="primary full" id="toggle-ads">${profile.adsRemoved?'Restore ad demo placements':'Enable ad-free preview'}</button><span class="fine-print">Preview only · no charge · no real purchase</span>`)));
 $('#info-content').addEventListener('click',e=>{if((e.target as HTMLElement).closest('#toggle-ads')){profile.adsRemoved=!profile.adsRemoved;ads.setAdsDisabled(profile.adsRemoved);persist();updateProfileUI();refreshDisplayAd();$<HTMLDialogElement>('#info-dialog').close();notify(profile.adsRemoved?'Ad-free preview enabled.':'Demo ad placements restored.');}});
-$('#about').onclick=()=>info(`<span class="eyebrow">AFTER HOURS ARCADE</span><h2>Drunken Joyride.</h2><p>An endless, fictional arcade drive with unpredictable steering, random traffic and roadworks on a Dutch midnight highway.</p><p>Your record, cars and submitted runs stay on this browser. Leaderboards mix labelled samples with local scores.</p><p>The top advertisement slot supports a configurable display-ad network. Until real publisher and slot IDs are configured, it earns no revenue. Rewarded videos, interstitials and remove-ads purchases are still clearly labelled demos.</p><button class="secondary full" id="open-ad-setup">View advertisement setup</button>`);
+$('#about').onclick=()=>info(`<span class="eyebrow">AFTER HOURS ARCADE</span><h2>Drunken Joyride.</h2><p>An endless, fictional arcade drive with unpredictable steering, random traffic and roadworks on a Dutch midnight highway. Bank points while driving, then reinvest them in permanent garage upgrades to go faster and earn more.</p><p>Your record, cars and submitted runs stay on this browser. Leaderboards mix labelled samples with local scores.</p><p>The top advertisement slot supports a configurable display-ad network. Until real publisher and slot IDs are configured, it earns no revenue. Rewarded videos, interstitials and remove-ads purchases are still clearly labelled demos.</p><button class="secondary full" id="open-ad-setup">View advertisement setup</button>`);
 
 document.querySelectorAll<HTMLElement>('[data-close]').forEach(b=>b.onclick=()=>$<HTMLDialogElement>('#'+b.dataset.close).close());
 function displayStatus(status: DisplayAdStatus) {
@@ -339,5 +395,5 @@ $('#info-content').addEventListener('click',e=>{
   if(target.closest('#decline-display-ads')){displayAdConsent=false;displayAdCleanup?.();displayAdCleanup=undefined;$('#display-ad').hidden=true;$('#ad-status').textContent='ADS DECLINED';$('#ad-placeholder').hidden=false;$('#ad-description').textContent='Display ads are off for this visit.';$<HTMLDialogElement>('#info-dialog').close();}
 });
 
-updateProfileUI();renderSkins();refreshDisplayAd();
+updateProfileUI();renderSkins();renderUpgrades();refreshDisplayAd();
 

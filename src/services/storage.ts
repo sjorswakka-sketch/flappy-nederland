@@ -1,5 +1,7 @@
 import { SKINS } from '../data/skins';
 import { CONTINENTS, normalizePlayerName, type Continent } from './leaderboard';
+import { defaultUpgradeLevels, normalizeUpgradeLevels, type UpgradeLevels } from '../data/upgrades';
+import { MAX_RUN_CREDITS, type RunCredit } from './economy';
 
 export { normalizePlayerName } from './leaderboard';
 export interface Profile {
@@ -10,11 +12,33 @@ export interface Profile {
   continent: Continent;
   sound: boolean;
   adsRemoved: boolean;
+  wallet: number;
+  lifetimeEarned: number;
+  upgrades: UpgradeLevels;
+  runCredits: RunCredit[];
 }
 export const PROFILE_STORAGE_KEY = 'drunken-joyride:profile:v1';
 let memory: Profile | null = null;
 export function defaultProfile(): Profile {
-  return { best: 0, selectedSkin: 'starter', unlockedSkins: ['starter'], name: 'Night Driver', continent: 'Europe', sound: false, adsRemoved: false };
+  return { best: 0, selectedSkin: 'starter', unlockedSkins: ['starter'], name: 'Night Driver', continent: 'Europe', sound: false, adsRemoved: false,
+    wallet: 0, lifetimeEarned: 0, upgrades: defaultUpgradeLevels(), runCredits: [] };
+}
+
+function nonnegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function normalizeRunCredits(value: unknown): RunCredit[] {
+  if (!Array.isArray(value)) return [];
+  const credits = new Map<string, number>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const { runId, score } = item as Partial<RunCredit>;
+    if (typeof runId !== 'string' || !runId.trim() || runId.length > 100
+      || typeof score !== 'number' || !Number.isSafeInteger(score) || score < 0) continue;
+    credits.set(runId, Math.max(credits.get(runId) ?? 0, score));
+  }
+  return [...credits].slice(-MAX_RUN_CREDITS).map(([runId, score]) => ({ runId, score }));
 }
 
 function normalizeProfile(value: unknown): Profile {
@@ -31,6 +55,11 @@ function normalizeProfile(value: unknown): Profile {
     name: normalizePlayerName(raw.name), continent: CONTINENTS.includes(raw.continent as Continent) ? raw.continent! : fallback.continent,
     sound: typeof raw.sound === 'boolean' ? raw.sound : fallback.sound,
     adsRemoved: typeof raw.adsRemoved === 'boolean' ? raw.adsRemoved : false,
+    // Existing version-one saves gain an empty wallet; old highscores are never minted twice.
+    wallet: nonnegativeInteger(raw.wallet),
+    lifetimeEarned: Math.max(nonnegativeInteger(raw.wallet), nonnegativeInteger(raw.lifetimeEarned)),
+    upgrades: normalizeUpgradeLevels(raw.upgrades),
+    runCredits: normalizeRunCredits(raw.runCredits),
   };
 }
 
@@ -42,7 +71,7 @@ export function loadProfile(): Profile {
     }
   } catch { /* Private mode and corrupt saved data fall back to this session's profile. */ }
   const profile = memory ?? defaultProfile();
-  return { ...profile, unlockedSkins: [...profile.unlockedSkins] };
+  return { ...profile, unlockedSkins: [...profile.unlockedSkins], upgrades: { ...profile.upgrades }, runCredits: profile.runCredits.map(credit => ({ ...credit })) };
 }
 
 export function saveProfile(profile: Profile): void {

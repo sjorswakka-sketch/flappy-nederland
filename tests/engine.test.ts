@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GameEngine, PHYSICS, WORLD, laneCenter, type HazardRow, type Hazard } from '../src/game/engine';
 import { SKINS } from '../src/data/skins';
+import { defaultUpgradeLevels, type UpgradeLevels } from '../src/data/upgrades';
 
 interface Internals {
   rows: HazardRow[]; x: number; renderedX: number; spawnClock: number; sceneryDistance: number;
   invulnerable: number; velocityX: number;
 }
-function harness() {
+function harness(upgrades?: UpgradeLevels) {
   let nextId = 0;
   const callbacks = new Map<number, FrameRequestCallback>();
   const gradient = { addColorStop() {} };
@@ -17,7 +18,7 @@ function harness() {
   vi.stubGlobal('cancelAnimationFrame', (id: number) => callbacks.delete(id));
   const canvas = { clientWidth: 480, width: 480, height: 640, getContext: () => context } as unknown as HTMLCanvasElement;
   const onScore = vi.fn(), onGameOver = vi.fn();
-  const engine = new GameEngine(canvas, { skin: SKINS[0], onScore, onGameOver });
+  const engine = new GameEngine(canvas, { skin: SKINS[0], onScore, onGameOver, upgrades });
   const state = engine as unknown as Internals;
   let time = 1000;
   function frame(dt = 1 / 60) {
@@ -134,4 +135,86 @@ describe('nitro and risk scoring', () => {
     h.engine.destroy();
   });
 });
+
+describe('permanent garage upgrades', () => {
+  const levels = (overrides: Partial<UpgradeLevels>): UpgradeLevels => ({ ...defaultUpgradeLevels(), ...overrides });
+
+  it('makes an engine purchase increase real travelled distance and the displayed speed', () => {
+    const stock = harness(); stock.start(); stock.clearTraffic(); stock.advance(1);
+    const baseline = { ...stock.engine.getSnapshot(), drift: stock.state.sceneryDistance };
+    stock.engine.destroy();
+    const tuned = harness(levels({ engine: 4 })); tuned.start(); tuned.clearTraffic(); tuned.advance(1);
+    expect(tuned.engine.getSnapshot().distance).toBeGreaterThan(baseline.distance * 1.15);
+    expect(tuned.engine.getSnapshot().speedKph).toBeGreaterThan(baseline.speedKph * 1.15);
+    expect(tuned.state.sceneryDistance).toBeGreaterThan(baseline.drift);
+    tuned.engine.destroy();
+  });
+
+  it('improves steering response and reduces physical sway without moving the road boundaries', () => {
+    const stock = harness(); stock.start(); stock.clearTraffic(); stock.engine.setSteering(-1); stock.advance(0.12);
+    const baseline = { movement: 240 - stock.state.x, sway: Math.abs(stock.state.renderedX - stock.state.x) };
+    stock.engine.destroy();
+    const tuned = harness(levels({ handling: 8 })); tuned.start(); tuned.clearTraffic(); tuned.engine.setSteering(-1); tuned.advance(0.12);
+    expect(240 - tuned.state.x).toBeGreaterThan(baseline.movement);
+    expect(Math.abs(tuned.state.renderedX - tuned.state.x)).toBeLessThan(baseline.sway * 0.7);
+    tuned.advance(0.5);
+    expect(tuned.state.x).toBe(WORLD.roadLeft + 27);
+    tuned.engine.destroy();
+  });
+
+  it('extends nitro duration and increases both passive and close-pass recharge', () => {
+    const stock = harness(); stock.start(); stock.clearTraffic(); stock.engine.boost(); stock.nearPass(); stock.advance(0.4);
+    const baselineEarnedCharge = stock.engine.getSnapshot().boostCharge;
+    stock.clearTraffic(); stock.advance(1.5);
+    expect(stock.engine.getSnapshot().boostActive).toBe(false);
+    const stockCharge = stock.engine.getSnapshot().boostCharge; stock.advance(0.2);
+    const baselinePassiveGain = stock.engine.getSnapshot().boostCharge - stockCharge;
+    stock.engine.destroy();
+    const tuned = harness(levels({ nitro: 8 })); tuned.start(); tuned.clearTraffic(); tuned.engine.boost(); tuned.nearPass(); tuned.advance(0.4);
+    expect(tuned.engine.getSnapshot().boostCharge).toBeGreaterThan(baselineEarnedCharge + 10);
+    tuned.clearTraffic(); tuned.advance(1.5);
+    expect(tuned.engine.getSnapshot().boostActive).toBe(true);
+    const tunedCharge = tuned.engine.getSnapshot().boostCharge; tuned.advance(0.2);
+    expect(tuned.engine.getSnapshot().boostCharge - tunedCharge).toBeGreaterThan(baselinePassiveGain);
+    tuned.engine.destroy();
+  });
+
+  it('carries fractional point bonuses across small rewards and resets the remainder for a new run', () => {
+    const stock = harness(); stock.start(); stock.clearTraffic();
+    for (let i = 0; i < 20; i++) {
+      stock.nearPass(80); stock.advance(0.5);
+    }
+    expect(stock.engine.getSnapshot().score).toBe(20);
+    stock.engine.destroy();
+    const tuned = harness(levels({ magnet: 1 })); tuned.start(); tuned.clearTraffic();
+    for (let i = 0; i < 20; i++) { tuned.nearPass(80); tuned.advance(0.5); }
+    expect(tuned.engine.getSnapshot().score).toBe(23);
+    expect(tuned.onScore.mock.calls.every(([score]) => Number.isSafeInteger(score))).toBe(true);
+    tuned.engine.start(); tuned.clearTraffic(); tuned.nearPass(80); tuned.advance(0.5);
+    expect(tuned.engine.getSnapshot().score).toBe(1);
+    tuned.engine.destroy();
+  });
+
+  it('freezes purchases during an active or repair-paused run and copies levels before the next start', () => {
+    const h = harness();
+    const purchase = levels({ engine: 4 });
+    expect(h.engine.setUpgrades(purchase)).toBe(true);
+    const tunedSpeed = h.engine.getSnapshot().speedKph;
+    purchase.engine = 0;
+    expect(h.engine.getSnapshot().speedKph).toBe(tunedSpeed);
+    h.start(); h.clearTraffic();
+    expect(h.engine.setUpgrades(defaultUpgradeLevels())).toBe(false);
+    h.engine.pause();
+    expect(h.engine.setUpgrades(defaultUpgradeLevels())).toBe(false);
+    expect(h.engine.getSnapshot().speedKph).toBeGreaterThan(115);
+    h.engine.resume(); h.frame();
+    h.nearPass(0); h.advance(0.2);
+    expect(h.engine.getSnapshot().status).toBe('over');
+    expect(h.engine.setUpgrades(defaultUpgradeLevels())).toBe(true);
+    h.engine.start();
+    expect(h.engine.getSnapshot().speedKph).toBe(101);
+    h.engine.destroy();
+  });
+});
+
 
